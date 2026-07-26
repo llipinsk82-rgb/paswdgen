@@ -75,15 +75,27 @@ jobs:
 
       - name: Run unit tests
         shell: bash
-        run: ./gradlew --no-daemon --stacktrace testDebugUnitTest
+        run: |
+          set -euo pipefail
+          mkdir -p app/build/ci-logs
+          ./gradlew --no-daemon --stacktrace testDebugUnitTest 2>&1 \
+            | tee app/build/ci-logs/unit-tests.log
 
       - name: Run Android lint
         shell: bash
-        run: ./gradlew --no-daemon --stacktrace lintDebug
+        run: |
+          set -euo pipefail
+          mkdir -p app/build/ci-logs
+          ./gradlew --no-daemon --stacktrace lintDebug 2>&1 \
+            | tee app/build/ci-logs/lint.log
 
       - name: Assemble debug APK
         shell: bash
-        run: ./gradlew --no-daemon --stacktrace assembleDebug
+        run: |
+          set -euo pipefail
+          mkdir -p app/build/ci-logs
+          ./gradlew --no-daemon --stacktrace assembleDebug 2>&1 \
+            | tee app/build/ci-logs/assemble.log
 
       - name: Upload verified wrapper, APK and reports
         if: always()
@@ -97,6 +109,7 @@ jobs:
             gradlew.bat
             gradle/wrapper/gradle-wrapper.jar
             gradle/wrapper/gradle-wrapper.properties
+            app/build/ci-logs/**
             app/build/outputs/apk/debug/*.apk
             app/build/reports/tests/**
             app/build/reports/lint-results-*.html
