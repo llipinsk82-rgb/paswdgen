@@ -18,9 +18,9 @@ concurrency:
 
 jobs:
   build:
-    name: Test, lint and assemble
+    name: Test, lint and package
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - name: Checkout repository
@@ -94,9 +94,17 @@ jobs:
           set -euo pipefail
           mkdir -p app/build/ci-logs
           ./gradlew --no-daemon --stacktrace assembleDebug 2>&1 \
-            | tee app/build/ci-logs/assemble.log
+            | tee app/build/ci-logs/assemble-debug.log
 
-      - name: Upload APK and reports
+      - name: Build unsigned release AAB
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/build/ci-logs
+          ./gradlew --no-daemon --stacktrace bundleRelease 2>&1 \
+            | tee app/build/ci-logs/bundle-release.log
+
+      - name: Upload packages and reports
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
@@ -106,6 +114,8 @@ jobs:
           path: |
             app/build/ci-logs/**
             app/build/outputs/apk/debug/*.apk
+            app/build/outputs/bundle/release/*.aab
             app/build/reports/tests/**
             app/build/reports/lint-results-*.html
             app/build/reports/lint-results-*.xml
+            app/build/outputs/mapping/release/**
