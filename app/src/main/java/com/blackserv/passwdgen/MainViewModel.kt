@@ -1,0 +1,138 @@
+package com.blackserv.passwdgen
+
+import android.app.Application
+import android.security.keystore.KeyPermanentlyInvalidatedException
+import android.security.keystore.UserNotAuthenticatedException
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+internal enum class AppSection { GENERATOR, VAULT }
+
+internal data class AppUiState(
+    val section: AppSection = AppSection.GENERATOR,
+    val options: PasswordOptions = PasswordOptions(),
+    val generated: GeneratedPassword = PasswordGenerator.generate(PasswordOptions()),
+    val vaultUnlocked: Boolean = false,
+    val vaultBusy: Boolean = false,
+    val entries: List<VaultEntry> = emptyList(),
+    val searchQuery: String = "",
+    val message: String? = null,
+)
+
+internal class MainViewModel(application: Application) : AndroidViewModel(application) {
+    private val repository = VaultRepository(application)
+    private val _state = MutableStateFlow(AppUiState())
+    val state: StateFlow<AppUiState> = _state.asStateFlow()
+
+    fun selectSection(section: AppSection) = _state.update { it.copy(section = section) }
+
+    fun updateOptions(transform: (PasswordOptions) -> PasswordOptions) {
+        val candidate = transform(_state.value.options)
+        if (!candidate.lowerCase && !candidate.upperCase && !candidate.digits && !candidate.special) {
+            showMessage("Wybierz co najmniej jeden zestaw znaków.")
+            return
+        }
+        _state.update { it.copy(options = candidate) }
+    }
+
+    fun generatePassword() {
+        runCatching { PasswordGenerator.generate(_state.value.options) }
+            .onSuccess { generated -> _state.update { it.copy(generated = generated) } }
+            .onFailure { error -> showMessage(error.message ?: "Nie udało się wygenerować hasła.") }
+    }
+
+    fun useGeneratedPassword(): String = _state.value.generated.value
+
+    fun unlockVault() {
+        if (_state.value.vaultBusy) return
+        _state.update { it.copy(vaultBusy = true, message = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                repository.unlockProbe()
+                repository.loadAll()
+            }.onSuccess { entries ->
+                _state.update {
+                    it.copy(vaultUnlocked = true, vaultBusy = false, entries = entries)
+                }
+            }.onFailure(::handleVaultError)
+        }
+    }
+
+    fun lockVault() {
+        _state.update {
+            it.copy(vaultUnlocked = false, vaultBusy = false, entries = emptyList(), searchQuery = "")
+        }
+    }
+
+    fun setSearchQuery(query: String) = _state.update { it.copy(searchQuery = query) }
+
+    fun saveEntry(entry: VaultEntry) {
+        if (!_state.value.vaultUnlocked || _state.value.vaultBusy) return
+        _state.update { it.copy(vaultBusy = true, message = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                repository.save(entry)
+                repository.loadAll()
+            }.onSuccess { entries ->
+                _state.update { it.copy(vaultBusy = false, entries = entries, message = "Wpis zapisany.") }
+            }.onFailure(::handleVaultError)
+        }
+    }
+
+    fun deleteEntry(id: String) {
+        if (!_state.value.vaultUnlocked || _state.value.vaultBusy) return
+        _state.update { it.copy(vaultBusy = true, message = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                repository.delete(id)
+                repository.loadAll()
+            }.onSuccess { entries ->
+                _state.update { it.copy(vaultBusy = false, entries = entries, message = "Wpis usunięty.") }
+            }.onFailure(::handleVaultError)
+        }
+    }
+
+    fun showMessage(message: String) = _state.update { it.copy(message = message) }
+    fun clearMessage() = _state.update { it.copy(message = null) }
+
+    private fun handleVaultError(error: Throwable) {
+        when {
+            error.hasCause<UserNotAuthenticatedException>() -> _state.update {
+                it.copy(
+                    vaultUnlocked = false,
+                    vaultBusy = false,
+                    entries = emptyList(),
+                    message = "Sejf jest zablokowany. Uwierzytelnij się ponownie.",
+                )
+            }
+
+            error.hasCause<KeyPermanentlyInvalidatedException>() -> _state.update {
+                it.copy(
+                    vaultUnlocked = false,
+                    vaultBusy = false,
+                    entries = emptyList(),
+                    message = "Klucz sejfu został unieważniony przez zmianę zabezpieczeń urządzenia. Nie zapisuj nowych danych i skontaktuj się z pomocą.",
+                )
+            }
+
+            else -> _state.update {
+                it.copy(vaultBusy = false, message = error.message ?: "Błąd sejfu.")
+            }
+        }
+    }
+
+    private inline fun <reified T : Throwable> Throwable.hasCause(): Boolean {
+        var current: Throwable? = this
+        while (current != null) {
+            if (current is T) return true
+            current = current.cause
+        }
+        return false
+    }
+}
