@@ -61,17 +61,16 @@ jobs:
 
           test -d "${android_home}/platforms/android-36"
 
-      - name: Generate and verify Gradle Wrapper
-        shell: bash
-        run: bash scripts/bootstrap-gradle-wrapper.sh
-
-      - name: Verify wrapper configuration
+      - name: Verify committed Gradle Wrapper
         shell: bash
         run: |
           set -euo pipefail
-          ./gradlew --version
-          grep -F "distributionSha256Sum=20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78" \
+          test -x gradlew
+          echo "81a82aaea5abcc8ff68b3dfcb58b3c3c429378efd98e7433460610fecd7ae45f  gradle/wrapper/gradle-wrapper.jar" \
+            | sha256sum --check --strict
+          grep -Fx "distributionSha256Sum=20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78" \
             gradle/wrapper/gradle-wrapper.properties
+          ./gradlew --version
 
       - name: Run unit tests
         shell: bash
@@ -97,7 +96,7 @@ jobs:
           ./gradlew --no-daemon --stacktrace assembleDebug 2>&1 \
             | tee app/build/ci-logs/assemble.log
 
-      - name: Upload verified wrapper, APK and reports
+      - name: Upload APK and reports
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
@@ -105,10 +104,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
           path: |
-            gradlew
-            gradlew.bat
-            gradle/wrapper/gradle-wrapper.jar
-            gradle/wrapper/gradle-wrapper.properties
             app/build/ci-logs/**
             app/build/outputs/apk/debug/*.apk
             app/build/reports/tests/**
