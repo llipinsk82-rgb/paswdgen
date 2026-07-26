@@ -69,7 +69,7 @@ internal fun PasswdGenApp(viewModel: MainViewModel, onUnlockRequest: () -> Unit)
         state.message?.let { snackbar.showSnackbar(it); viewModel.clearMessage() }
     }
     Scaffold(
-        topBar = { TopAppBar(title = { Text("PasswdGen · Secure Vault") }) },
+        topBar = { TopAppBar(title = { Text("PasswdGen") }) },
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
             NavigationBar(modifier = Modifier.navigationBarsPadding()) {
@@ -110,59 +110,21 @@ private fun GeneratorScreen(
 ) {
     val context = LocalContext.current
     Column(
-        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 14.dp, vertical = 10.dp),
     ) {
-        Text("Bezpieczne hasło w kilka sekund", style = MaterialTheme.typography.headlineSmall)
-        Text("Generator działa lokalnie, używa SecureRandom i niczego nie wysyła do sieci.")
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-        ) {
-            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                SelectionContainer {
-                    Text(state.generated.value, style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Monospace)
-                }
-                Text(strengthLabel(state.generated.entropyBits))
-                Text("Szacowana entropia: ${state.generated.entropyBits} bitów")
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(onClick = onGenerate) { Text("Generuj ponownie") }
-                    OutlinedButton(onClick = {
-                        copySensitive(context, state.generated.value)
-                        onMessage("Hasło skopiowane. Schowek wyczyści się po 60 sekundach.")
-                    }) { Text("Kopiuj") }
-                }
-            }
-        }
-        Text("Długość hasła", style = MaterialTheme.typography.titleMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(12, 16, 20, 24, 32).forEach { preset ->
-                if (state.options.length == preset) {
-                    Button(onClick = { onOptionsChange { it.copy(length = preset) } }) { Text("$preset") }
-                } else {
-                    OutlinedButton(onClick = { onOptionsChange { it.copy(length = preset) } }) { Text("$preset") }
-                }
-            }
-        }
-        Text("${state.options.length} znaków · zalecane 16–20")
-        Slider(
-            value = state.options.length.toFloat(),
-            onValueChange = { value -> onOptionsChange {
-                it.copy(length = value.toInt().coerceIn(PasswordGenerator.MIN_LENGTH, PasswordGenerator.MAX_LENGTH))
-            } },
-            valueRange = PasswordGenerator.MIN_LENGTH.toFloat()..PasswordGenerator.MAX_LENGTH.toFloat(),
-            steps = PasswordGenerator.MAX_LENGTH - PasswordGenerator.MIN_LENGTH - 1,
+        PremiumGeneratorContent(
+            state = state,
+            onOptionsChange = onOptionsChange,
+            onGenerate = onGenerate,
+            onCopy = {
+                copySensitive(context, state.generated.value)
+                onMessage("Hasło skopiowane. Schowek wyczyści się po 60 sekundach.")
+            },
         )
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Zestawy znaków", style = MaterialTheme.typography.titleMedium)
-                OptionRow("Małe litery (a–z)", state.options.lowerCase) { value -> onOptionsChange { it.copy(lowerCase = value) } }
-                OptionRow("Wielkie litery (A–Z)", state.options.upperCase) { value -> onOptionsChange { it.copy(upperCase = value) } }
-                OptionRow("Cyfry (0–9)", state.options.digits) { value -> onOptionsChange { it.copy(digits = value) } }
-                OptionRow("Znaki specjalne", state.options.special) { value -> onOptionsChange { it.copy(special = value) } }
-                OptionRow("Pomijaj znaki podobne", state.options.avoidAmbiguous) { value -> onOptionsChange { it.copy(avoidAmbiguous = value) } }
-            }
-        }
+        Spacer(Modifier.height(14.dp))
     }
 }
 
@@ -253,7 +215,7 @@ private fun VaultScreen(
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxSize()) {
                 items(filtered, key = VaultEntry::id) { entry ->
-                    CompactVaultEntryCard(
+                    PremiumVaultRow(
                         entry = entry,
                         expanded = expanded[entry.id] == true,
                         revealed = revealed[entry.id] == true,
@@ -289,7 +251,7 @@ private fun VaultScreen(
 }
 
 @Composable
-private fun CompactVaultEntryCard(
+private fun PremiumVaultRow(
     entry: VaultEntry,
     expanded: Boolean,
     revealed: Boolean,
