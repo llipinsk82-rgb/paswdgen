@@ -16,7 +16,7 @@ jobs:
         with:
           ref: agent/android-vault-mvp
           fetch-depth: 0
-      - name: Integrate premium layout
+      - name: Build premium layout
         shell: bash
         run: |
           set -euo pipefail
