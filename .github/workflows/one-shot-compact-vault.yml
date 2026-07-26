@@ -1,0 +1,165 @@
+name: One-shot compact vault UI
+
+on:
+  push:
+    branches: [agent/android-vault-mvp]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.repository == 'llipinsk82-rgb/paswdgen'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: agent/android-vault-mvp
+          fetch-depth: 0
+      - name: Build compact expandable vault list
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/blackserv/passwdgen/AppUi.kt')
+          s = p.read_text()
+          s = s.replace(
+              '    val revealed = remember { mutableStateMapOf<String, Boolean>() }',
+              '    val expanded = remember { mutableStateMapOf<String, Boolean>() }\n    val revealed = remember { mutableStateMapOf<String, Boolean>() }',
+          )
+          start = s.index('    Column(modifier.fillMaxSize().padding(horizontal = 16.dp)) {', s.index('private fun VaultScreen'))
+          end = s.index('    if (creating)', start)
+          replacement = '''    Column(modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+              Row(
+                  Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 6.dp),
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+              ) {
+                  OutlinedTextField(
+                      value = state.searchQuery,
+                      onValueChange = onSearchChange,
+                      placeholder = { Text("Szukaj w sejfie") },
+                      singleLine = true,
+                      modifier = Modifier.weight(1f),
+                  )
+                  Button(onClick = { creating = true }) { Text("+") }
+              }
+              Text(
+                  "${filtered.size} z ${state.entries.size} wpisów",
+                  style = MaterialTheme.typography.labelMedium,
+                  color = MaterialTheme.colorScheme.secondary,
+                  modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
+              )
+              if (filtered.isEmpty()) {
+                  Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                      Text(if (state.entries.isEmpty()) "Sejf jest pusty." else "Brak pasujących wpisów.")
+                  }
+              } else {
+                  LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxSize()) {
+                      items(filtered, key = VaultEntry::id) { entry ->
+                          CompactVaultEntryCard(
+                              entry = entry,
+                              expanded = expanded[entry.id] == true,
+                              revealed = revealed[entry.id] == true,
+                              onToggleExpanded = { expanded[entry.id] = expanded[entry.id] != true },
+                              onRevealChange = { revealed[entry.id] = it },
+                              onCopyLogin = {
+                                  copySensitive(context, entry.username)
+                                  onMessage("Login skopiowany. Schowek wyczyści się po 60 sekundach.")
+                              },
+                              onCopyPassword = {
+                                  copySensitive(context, entry.password)
+                                  onMessage("Hasło skopiowane. Schowek wyczyści się po 60 sekundach.")
+                              },
+                              onEdit = { editing = entry },
+                              onDelete = { deleting = entry },
+                          )
+                      }
+                      item { Spacer(Modifier.height(12.dp)) }
+                  }
+              }
+          }
+'''
+          s = s[:start] + replacement + s[end:]
+          card_start = s.index('@Composable\nprivate fun VaultEntryCard(')
+          card_end = s.index('@Composable\nprivate fun EntryDialog(', card_start)
+          card = '''@Composable
+          private fun CompactVaultEntryCard(
+              entry: VaultEntry,
+              expanded: Boolean,
+              revealed: Boolean,
+              onToggleExpanded: () -> Unit,
+              onRevealChange: (Boolean) -> Unit,
+              onCopyLogin: () -> Unit,
+              onCopyPassword: () -> Unit,
+              onEdit: () -> Unit,
+              onDelete: () -> Unit,
+          ) {
+              Card(Modifier.fillMaxWidth()) {
+                  Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                      Row(
+                          modifier = Modifier.fillMaxWidth(),
+                          verticalAlignment = Alignment.CenterVertically,
+                      ) {
+                          Column(Modifier.weight(1f)) {
+                              Text(entry.service, style = MaterialTheme.typography.titleMedium)
+                              if (entry.website.isNotBlank()) {
+                                  Text(
+                                      entry.website,
+                                      style = MaterialTheme.typography.bodySmall,
+                                      color = MaterialTheme.colorScheme.secondary,
+                                      maxLines = 1,
+                                  )
+                              }
+                          }
+                          TextButton(onClick = onToggleExpanded) {
+                              Text(if (expanded) "Zwiń" else "Otwórz")
+                          }
+                      }
+                      if (expanded) {
+                          HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                          Text("Login", style = MaterialTheme.typography.labelMedium)
+                          Text(entry.username, style = MaterialTheme.typography.bodyLarge)
+                          Spacer(Modifier.height(6.dp))
+                          Text("Hasło", style = MaterialTheme.typography.labelMedium)
+                          Text(
+                              if (revealed) entry.password else "••••••••••••",
+                              fontFamily = FontFamily.Monospace,
+                              maxLines = 1,
+                          )
+                          Row(
+                              modifier = Modifier.fillMaxWidth(),
+                              verticalAlignment = Alignment.CenterVertically,
+                              horizontalArrangement = Arrangement.SpaceBetween,
+                          ) {
+                              Row(verticalAlignment = Alignment.CenterVertically) {
+                                  Text("Pokaż", style = MaterialTheme.typography.bodySmall)
+                                  Spacer(Modifier.width(6.dp))
+                                  Switch(revealed, onRevealChange)
+                              }
+                              Row {
+                                  TextButton(onClick = onCopyLogin) { Text("Kopiuj login") }
+                                  TextButton(onClick = onCopyPassword) { Text("Kopiuj hasło") }
+                              }
+                          }
+                          Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                              OutlinedButton(onClick = onEdit) { Text("Edytuj") }
+                              TextButton(onClick = onDelete) { Text("Usuń") }
+                          }
+                      }
+                  }
+              }
+          }
+
+          '''
+          s = s[:card_start] + card + s[card_end:]
+          p.write_text(s)
+          PY
+          git diff --check
+          git config user.name 'BlackServ CTO Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add app/src/main/java/com/blackserv/passwdgen/AppUi.kt
+          git commit -m 'feat: compact and expand vault entries'
+          git push origin HEAD:agent/android-vault-mvp
