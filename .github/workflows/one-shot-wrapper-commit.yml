@@ -37,7 +37,11 @@ jobs:
           actual_jar="$(sha256sum gradle/wrapper/gradle-wrapper.jar | awk '{print $1}')"
           [[ "${actual_jar}" == "${expected_jar}" ]]
 
-          mapfile -t changed < <(git status --porcelain | sed 's/^...//' | sort)
+          mapfile -t changed < <(
+            git status --porcelain=v1 --untracked-files=all \
+              | sed 's/^...//' \
+              | sort
+          )
           expected=(
             'gradle/wrapper/gradle-wrapper.jar'
             'gradle/wrapper/gradle-wrapper.properties'
