@@ -4,7 +4,7 @@ Androidowy generator haseł i lokalny sejf danych logowania.
 
 ## Status
 
-**MVP 0.1.0 — kod bazowy.** Projekt nie jest jeszcze gotowy do publikacji w Google Play. Przed wydaniem wymagane są testy na fizycznych urządzeniach, audyt kryptografii, podpis release, grafiki sklepu i finalna decyzja dotycząca identyfikatora pakietu.
+**MVP 0.1.0 — kod bazowy.** Projekt nie jest jeszcze gotowy do publikacji w Google Play. Przed wydaniem wymagane są pełna kompilacja, testy na fizycznych urządzeniach, audyt kryptografii, podpis release, grafiki sklepu i finalna decyzja dotycząca identyfikatora pakietu.
 
 ## Funkcje MVP
 
@@ -25,7 +25,12 @@ Androidowy generator haseł i lokalny sejf danych logowania.
 
 SQLite przechowuje tylko losowy identyfikator rekordu, zaszyfrowany ładunek, IV oraz znaczniki czasu. Nazwa witryny, login, hasło i notatki nie występują w bazie w postaci jawnej. Identyfikator rekordu jest używany jako AAD dla AES-GCM, co wiąże szyfrogram z konkretnym rekordem.
 
-Szczegóły: [`docs/SECURITY.md`](docs/SECURITY.md).
+Dokumenty:
+
+- [`docs/SECURITY.md`](docs/SECURITY.md) — model bezpieczeństwa,
+- [`docs/ADR-001-CREDENTIAL-STRATEGY.md`](docs/ADR-001-CREDENTIAL-STRATEGY.md) — decyzja dotycząca Google Password Manager i Android Credential Provider,
+- [`docs/PLAY_STORE.md`](docs/PLAY_STORE.md) — przygotowanie publikacji,
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — kolejne etapy.
 
 ## Wymagania
 
@@ -34,16 +39,17 @@ Szczegóły: [`docs/SECURITY.md`](docs/SECURITY.md).
 - Android SDK 36,
 - Gradle 8.13.
 
-Repozytorium nie zawiera jeszcze binarnego `gradle-wrapper.jar`, ponieważ obecne środowisko wykonawcze nie miało narzędzia Gradle. Po pierwszym klonowaniu należy jednorazowo wykonać:
+Repozytorium nie zawiera jeszcze binarnego `gradle-wrapper.jar`, ponieważ bieżące środowisko wykonawcze nie mogło pobrać oficjalnej dystrybucji. Nie należy kopiować przypadkowego JAR-a ani generować wrappera z niezweryfikowanej instalacji.
+
+Na zaufanej maszynie z Linuksem i dostępem do internetu należy wykonać:
 
 ```bash
-gradle wrapper --gradle-version 8.13
-./gradlew test
-./gradlew lintDebug
-./gradlew assembleDebug
+bash scripts/bootstrap-gradle-wrapper.sh
+./gradlew --version
+./gradlew test lintDebug assembleDebug
 ```
 
-Wygenerowany wrapper powinien zostać dodany do repozytorium przed pierwszym PR-em wydaniowym.
+Skrypt pobiera oficjalną dystrybucję Gradle 8.13, sprawdza jej SHA-256, generuje wrapper w izolowanym minimalnym projekcie, zapisuje checksumę dystrybucji w konfiguracji i sprawdza checksumę `gradle-wrapper.jar`. Wygenerowane pliki wrappera powinny zostać dodane do tej samej gałęzi dopiero po przejściu weryfikacji.
 
 ## Ważne ograniczenia MVP
 
