@@ -21,23 +21,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
@@ -54,7 +48,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -125,21 +118,6 @@ private fun GeneratorScreen(
             },
         )
         Spacer(Modifier.height(14.dp))
-    }
-}
-
-private fun strengthLabel(bits: Int): String = when {
-    bits >= 120 -> "Bardzo mocne"
-    bits >= 80 -> "Mocne"
-    bits >= 60 -> "Dobre"
-    else -> "Podstawowe"
-}
-
-@Composable
-private fun OptionRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, modifier = Modifier.weight(1f))
-        Checkbox(checked, onCheckedChange)
     }
 }
 
@@ -220,7 +198,7 @@ private fun VaultScreen(
                         expanded = expanded[entry.id] == true,
                         revealed = revealed[entry.id] == true,
                         onToggleExpanded = { expanded[entry.id] = expanded[entry.id] != true },
-                        onRevealChange = { revealed[entry.id] = it },
+                        onRevealChange = { isRevealed -> revealed[entry.id] = isRevealed },
                         onCopyLogin = {
                             copySensitive(context, entry.username)
                             onMessage("Login skopiowany. Schowek wyczyści się po 60 sekundach.")
@@ -247,69 +225,6 @@ private fun VaultScreen(
             confirmButton = { Button(onClick = { deleting = null; onDelete(entry.id) }) { Text("Usuń") } },
             dismissButton = { TextButton(onClick = { deleting = null }) { Text("Anuluj") } },
         )
-    }
-}
-
-@Composable
-private fun PremiumVaultRow(
-    entry: VaultEntry,
-    expanded: Boolean,
-    revealed: Boolean,
-    onToggleExpanded: () -> Unit,
-    onRevealChange: (Boolean) -> Unit,
-    onCopyLogin: () -> Unit,
-    onCopyPassword: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(entry.service, style = MaterialTheme.typography.titleMedium)
-                    if (entry.website.isNotBlank()) {
-                        Text(
-                            entry.website,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.secondary,
-                            maxLines = 1,
-                        )
-                    }
-                }
-                TextButton(onClick = onToggleExpanded) { Text(if (expanded) "Zwiń" else "Otwórz") }
-            }
-            if (expanded) {
-                HorizontalDivider(Modifier.padding(vertical = 6.dp))
-                Text("Login", style = MaterialTheme.typography.labelMedium)
-                Text(entry.username, style = MaterialTheme.typography.bodyLarge)
-                Spacer(Modifier.height(6.dp))
-                Text("Hasło", style = MaterialTheme.typography.labelMedium)
-                Text(
-                    if (revealed) entry.password else "••••••••••••",
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Pokaż", style = MaterialTheme.typography.bodySmall)
-                        Spacer(Modifier.width(6.dp))
-                        Switch(revealed, onRevealChange)
-                    }
-                    Row {
-                        TextButton(onClick = onCopyLogin) { Text("Kopiuj login") }
-                        TextButton(onClick = onCopyPassword) { Text("Kopiuj hasło") }
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedButton(onClick = onEdit) { Text("Edytuj") }
-                    TextButton(onClick = onDelete) { Text("Usuń") }
-                }
-            }
-        }
     }
 }
 
