@@ -4,7 +4,7 @@ Androidowy generator haseł i lokalny sejf danych logowania.
 
 ## Status
 
-**MVP 0.1.0 — kod bazowy.** Projekt nie jest jeszcze gotowy do publikacji w Google Play. Przed wydaniem wymagane są pełna kompilacja, testy na fizycznych urządzeniach, audyt kryptografii, podpis release, grafiki sklepu i finalna decyzja dotycząca identyfikatora pakietu.
+**MVP 0.1.0 — kompilowalny kod bazowy.** Testy jednostkowe, Android Lint i budowa debug APK przechodzą w CI dla Android SDK 36, JDK 17 i Gradle 8.13. Projekt nie jest jeszcze gotowy do publikacji w Google Play: przed wydaniem wymagane są testy na fizycznych urządzeniach, audyt kryptografii, procedura odzyskiwania sejfu, podpis release, materiały sklepu i finalna decyzja dotycząca identyfikatora pakietu.
 
 ## Funkcje MVP
 
@@ -36,20 +36,25 @@ Dokumenty:
 
 - Android Studio obsługujące Android Gradle Plugin 8.12,
 - JDK 17,
-- Android SDK 36,
-- Gradle 8.13.
+- Android SDK 36.
 
-Repozytorium nie zawiera jeszcze binarnego `gradle-wrapper.jar`, ponieważ bieżące środowisko wykonawcze nie mogło pobrać oficjalnej dystrybucji. Nie należy kopiować przypadkowego JAR-a ani generować wrappera z niezweryfikowanej instalacji.
+Repozytorium zawiera Gradle Wrapper 8.13. Jego JAR oraz dystrybucja są przypięte zweryfikowanymi sumami SHA-256, a CI sprawdza je przed wykonaniem kodu Gradle.
 
-Na zaufanej maszynie z Linuksem i dostępem do internetu należy wykonać:
+## Budowanie
+
+```bash
+./gradlew testDebugUnitTest
+./gradlew lintDebug
+./gradlew assembleDebug
+```
+
+Awaryjne odtworzenie wrappera na zaufanej maszynie linuksowej:
 
 ```bash
 bash scripts/bootstrap-gradle-wrapper.sh
-./gradlew --version
-./gradlew test lintDebug assembleDebug
 ```
 
-Skrypt pobiera oficjalną dystrybucję Gradle 8.13, sprawdza jej SHA-256, generuje wrapper w izolowanym minimalnym projekcie, zapisuje checksumę dystrybucji w konfiguracji i sprawdza checksumę `gradle-wrapper.jar`. Wygenerowane pliki wrappera powinny zostać dodane do tej samej gałęzi dopiero po przejściu weryfikacji.
+Skrypt pobiera oficjalną dystrybucję Gradle 8.13, sprawdza jej SHA-256, generuje wrapper w izolowanym minimalnym projekcie, zapisuje checksumę dystrybucji w konfiguracji i sprawdza checksumę `gradle-wrapper.jar`.
 
 ## Ważne ograniczenia MVP
 
