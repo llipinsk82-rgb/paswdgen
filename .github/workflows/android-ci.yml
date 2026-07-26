@@ -38,8 +38,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+          android_home="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [[ -z "${android_home}" ]]; then
+            echo "ERROR: ANDROID_SDK_ROOT and ANDROID_HOME are not set." >&2
+            exit 1
+          fi
+
+          sdkmanager_bin="$(command -v sdkmanager || true)"
+          if [[ -z "${sdkmanager_bin}" ]]; then
+            sdkmanager_bin="$(find "${android_home}/cmdline-tools" -type f -name sdkmanager 2>/dev/null | sort -V | tail -n 1)"
+          fi
+          if [[ -z "${sdkmanager_bin}" || ! -x "${sdkmanager_bin}" ]]; then
+            echo "ERROR: sdkmanager not found in Android SDK: ${android_home}" >&2
+            exit 1
+          fi
+
+          yes | "${sdkmanager_bin}" --licenses >/dev/null || true
+          "${sdkmanager_bin}" --install \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "platform-tools"
+
+          test -d "${android_home}/platforms/android-36"
 
       - name: Generate and verify Gradle Wrapper
         shell: bash
