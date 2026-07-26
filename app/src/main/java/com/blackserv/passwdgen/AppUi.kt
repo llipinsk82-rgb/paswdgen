@@ -15,29 +15,31 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -47,48 +49,56 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun PasswdGenApp(viewModel: MainViewModel, onUnlockRequest: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+
     LaunchedEffect(state.message) {
-        state.message?.let { snackbar.showSnackbar(it); viewModel.clearMessage() }
+        state.message?.let {
+            snackbar.showSnackbar(it)
+            viewModel.clearMessage()
+        }
     }
-    Scaffold(
-        topBar = { TopAppBar(title = { Text("PasswdGen") }) },
-        snackbarHost = { SnackbarHost(snackbar) },
-        bottomBar = {
-            NavigationBar(modifier = Modifier.navigationBarsPadding()) {
-                NavigationBarItem(
-                    selected = state.section == AppSection.GENERATOR,
-                    onClick = { viewModel.selectSection(AppSection.GENERATOR) },
-                    icon = { Text("✦") }, label = { Text("Generator") },
+
+    PremiumAppBackground {
+        Scaffold(
+            containerColor = Color.Transparent,
+            topBar = { PremiumTopBar(state.section) },
+            snackbarHost = { SnackbarHost(snackbar) },
+            bottomBar = {
+                PremiumBottomBar(
+                    section = state.section,
+                    onSelect = viewModel::selectSection,
                 )
-                NavigationBarItem(
-                    selected = state.section == AppSection.VAULT,
-                    onClick = { viewModel.selectSection(AppSection.VAULT) },
-                    icon = { Text("▣") }, label = { Text("Sejf") },
+            },
+        ) { padding ->
+            when (state.section) {
+                AppSection.GENERATOR -> GeneratorScreen(
+                    state = state,
+                    onOptionsChange = viewModel::updateOptions,
+                    onGenerate = viewModel::generatePassword,
+                    onMessage = viewModel::showMessage,
+                    modifier = Modifier.padding(padding),
+                )
+                AppSection.VAULT -> VaultScreen(
+                    state = state,
+                    onUnlockRequest = onUnlockRequest,
+                    onSearchChange = viewModel::setSearchQuery,
+                    onSave = viewModel::saveEntry,
+                    onDelete = viewModel::deleteEntry,
+                    onUseGenerated = viewModel::useGeneratedPassword,
+                    onMessage = viewModel::showMessage,
+                    modifier = Modifier.padding(padding),
                 )
             }
-        },
-    ) { padding ->
-        when (state.section) {
-            AppSection.GENERATOR -> GeneratorScreen(
-                state, viewModel::updateOptions, viewModel::generatePassword,
-                viewModel::showMessage, Modifier.padding(padding),
-            )
-            AppSection.VAULT -> VaultScreen(
-                state, onUnlockRequest, viewModel::setSearchQuery, viewModel::saveEntry,
-                viewModel::deleteEntry, viewModel::useGeneratedPassword,
-                viewModel::showMessage, Modifier.padding(padding),
-            )
         }
     }
 }
@@ -106,7 +116,7 @@ private fun GeneratorScreen(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .padding(horizontal = 14.dp, vertical = 8.dp),
     ) {
         PremiumGeneratorContent(
             state = state,
@@ -134,19 +144,10 @@ private fun VaultScreen(
 ) {
     if (!state.vaultUnlocked) {
         Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Card(Modifier.padding(24.dp)) {
-                Column(
-                    Modifier.padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
-                ) {
-                    Text("Sejf jest zablokowany", style = MaterialTheme.typography.headlineSmall)
-                    Text("AES-256-GCM · Android Keystore · lokalnie na urządzeniu")
-                    Button(onClick = onUnlockRequest, enabled = !state.vaultBusy) {
-                        if (state.vaultBusy) CircularProgressIndicator(Modifier.width(20.dp)) else Text("Odblokuj sejf")
-                    }
-                }
-            }
+            PremiumLockedVault(
+                vaultBusy = state.vaultBusy,
+                onUnlockRequest = onUnlockRequest,
+            )
         }
         return
     }
@@ -158,40 +159,45 @@ private fun VaultScreen(
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
     val revealed = remember { mutableStateMapOf<String, Boolean>() }
     val filtered = remember(state.entries, state.searchQuery) {
-        val q = state.searchQuery.trim().lowercase()
-        if (q.isBlank()) state.entries else state.entries.filter {
-            it.service.lowercase().contains(q) || it.website.lowercase().contains(q) ||
-                it.username.lowercase().contains(q) || it.notes.lowercase().contains(q)
+        val query = state.searchQuery.trim().lowercase()
+        if (query.isBlank()) {
+            state.entries
+        } else {
+            state.entries.filter {
+                it.service.lowercase().contains(query) ||
+                    it.website.lowercase().contains(query) ||
+                    it.username.lowercase().contains(query) ||
+                    it.notes.lowercase().contains(query)
+            }
         }
     }
 
-    Column(modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-        Row(
-            Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedTextField(
-                value = state.searchQuery,
-                onValueChange = onSearchChange,
-                placeholder = { Text("Szukaj w sejfie") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
-            Button(onClick = { creating = true }) { Text("+") }
-        }
-        Text(
-            "${filtered.size} z ${state.entries.size} wpisów",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.secondary,
-            modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 14.dp),
+    ) {
+        PremiumVaultToolbar(
+            query = state.searchQuery,
+            visibleCount = filtered.size,
+            totalCount = state.entries.size,
+            onSearchChange = onSearchChange,
+            onAdd = { creating = true },
         )
+        Spacer(Modifier.height(10.dp))
+
         if (filtered.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(if (state.entries.isEmpty()) "Sejf jest pusty." else "Brak pasujących wpisów.")
+                Text(
+                    if (state.entries.isEmpty()) "Sejf jest pusty." else "Brak pasujących wpisów.",
+                    color = PgTextMuted,
+                )
             }
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxSize()) {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxSize(),
+            ) {
                 items(filtered, key = VaultEntry::id) { entry ->
                     PremiumVaultRow(
                         entry = entry,
@@ -211,19 +217,58 @@ private fun VaultScreen(
                         onDelete = { deleting = entry },
                     )
                 }
-                item { Spacer(Modifier.height(12.dp)) }
+                item { Spacer(Modifier.height(14.dp)) }
             }
         }
     }
 
-    if (creating) EntryDialog(null, onUseGenerated, { creating = false }) { creating = false; onSave(it) }
-    editing?.let { entry -> EntryDialog(entry, onUseGenerated, { editing = null }) { editing = null; onSave(it) } }
+    if (creating) {
+        EntryDialog(
+            initial = null,
+            generatedPassword = onUseGenerated,
+            onDismiss = { creating = false },
+            onSave = {
+                creating = false
+                onSave(it)
+            },
+        )
+    }
+
+    editing?.let { entry ->
+        EntryDialog(
+            initial = entry,
+            generatedPassword = onUseGenerated,
+            onDismiss = { editing = null },
+            onSave = {
+                editing = null
+                onSave(it)
+            },
+        )
+    }
+
     deleting?.let { entry ->
         AlertDialog(
-            onDismissRequest = { deleting = null }, title = { Text("Usunąć wpis?") },
-            text = { Text("Wpis „${entry.service}” zostanie trwale usunięty.") },
-            confirmButton = { Button(onClick = { deleting = null; onDelete(entry.id) }) { Text("Usuń") } },
-            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Anuluj") } },
+            onDismissRequest = { deleting = null },
+            containerColor = PgSurface,
+            shape = RoundedCornerShape(22.dp),
+            title = { Text("Usunąć wpis?", color = PgText) },
+            text = { Text("Wpis „${entry.service}” zostanie trwale usunięty.", color = PgTextMuted) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        deleting = null
+                        onDelete(entry.id)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = PgDanger),
+                ) {
+                    Text("Usuń")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleting = null }) {
+                    Text("Anuluj", color = PgTextMuted)
+                }
+            },
         )
     }
 }
@@ -242,46 +287,130 @@ private fun EntryDialog(
     var notes by remember(initial?.id) { mutableStateOf(initial?.notes.orEmpty()) }
     var visible by remember(initial?.id) { mutableStateOf(false) }
     var error by remember(initial?.id) { mutableStateOf<String?>(null) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (initial == null) "Nowy wpis" else "Edytuj wpis") },
+        containerColor = PgSurface,
+        shape = RoundedCornerShape(24.dp),
+        title = {
+            Text(
+                if (initial == null) "Nowy wpis" else "Edytuj wpis",
+                color = PgText,
+            )
+        },
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState()).imePadding(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(service, { service = it }, label = { Text("Nazwa usługi*") }, singleLine = true)
-                OutlinedTextField(website, { website = it }, label = { Text("Adres witryny") }, singleLine = true)
-                OutlinedTextField(username, { username = it }, label = { Text("Login / e-mail*") }, singleLine = true)
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()).imePadding(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                PremiumTextField(service, { service = it }, "Nazwa usługi*")
+                PremiumTextField(website, { website = it }, "Adres witryny")
+                PremiumTextField(username, { username = it }, "Login / e-mail*")
                 OutlinedTextField(
-                    password, { password = it }, label = { Text("Hasło*") }, singleLine = true,
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Hasło*") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
                     visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { visible = !visible }) {
+                            Icon(
+                                if (visible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                                contentDescription = if (visible) "Ukryj hasło" else "Pokaż hasło",
+                            )
+                        }
+                    },
+                    colors = premiumOutlinedFieldColors(),
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Pokaż")
-                    Switch(visible, { visible = it })
+                    Text("Pokaż", color = PgTextMuted)
+                    Switch(
+                        checked = visible,
+                        onCheckedChange = { visible = it },
+                        colors = SwitchDefaults.colors(checkedTrackColor = PgCyan),
+                    )
                     Spacer(Modifier.weight(1f))
-                    TextButton(onClick = { password = generatedPassword() }) { Text("Użyj wygenerowanego") }
+                    TextButton(onClick = { password = generatedPassword() }) {
+                        Icon(Icons.Outlined.AutoAwesome, contentDescription = null, tint = PgCyan)
+                        Spacer(Modifier.width(5.dp))
+                        Text("Użyj generatora", color = PgCyan)
+                    }
                 }
-                OutlinedTextField(notes, { notes = it }, label = { Text("Notatki") }, minLines = 2, maxLines = 5)
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                OutlinedTextField(
+                    value = notes,
+                    onValueChange = { notes = it },
+                    label = { Text("Notatki") },
+                    minLines = 2,
+                    maxLines = 5,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = premiumOutlinedFieldColors(),
+                )
+                error?.let { Text(it, color = PgDanger) }
             }
         },
         confirmButton = {
-            Button(onClick = {
-                error = when {
-                    service.isBlank() -> "Podaj nazwę usługi."
-                    username.isBlank() -> "Podaj login."
-                    password.isBlank() -> "Podaj hasło."
-                    else -> null
-                }
-                if (error == null) onSave(
-                    (initial ?: VaultEntry(service = service, username = username, password = password)).copy(
-                        service = service, website = website, username = username, password = password, notes = notes,
-                    ),
-                )
-            }) { Text("Zapisz") }
+            Button(
+                onClick = {
+                    error = when {
+                        service.isBlank() -> "Podaj nazwę usługi."
+                        username.isBlank() -> "Podaj login."
+                        password.isBlank() -> "Podaj hasło."
+                        else -> null
+                    }
+                    if (error == null) {
+                        onSave(
+                            (initial ?: VaultEntry(
+                                service = service,
+                                username = username,
+                                password = password,
+                            )).copy(
+                                service = service,
+                                website = website,
+                                username = username,
+                                password = password,
+                                notes = notes,
+                            ),
+                        )
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = PgCyan, contentColor = Color(0xFF001517)),
+            ) {
+                Text("Zapisz")
+            }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Anuluj") } },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Anuluj", color = PgTextMuted)
+            }
+        },
     )
 }
+
+@Composable
+private fun PremiumTextField(value: String, onValueChange: (String) -> Unit, label: String) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+        colors = premiumOutlinedFieldColors(),
+    )
+}
+
+@Composable
+private fun premiumOutlinedFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedTextColor = PgText,
+    unfocusedTextColor = PgText,
+    focusedBorderColor = PgCyan,
+    unfocusedBorderColor = PgStrokeStrong,
+    focusedLabelColor = PgCyan,
+    unfocusedLabelColor = PgTextMuted,
+    cursorColor = PgCyan,
+    focusedTrailingIconColor = PgCyan,
+    unfocusedTrailingIconColor = PgTextMuted,
+)
 
 private fun copySensitive(context: Context, value: String) {
     val appContext = context.applicationContext
@@ -293,8 +422,11 @@ private fun copySensitive(context: Context, value: String) {
     }
     clipboard.setPrimaryClip(clip)
     Handler(Looper.getMainLooper()).postDelayed({
-        val current = clipboard.primaryClip?.takeIf { it.itemCount > 0 }
-            ?.getItemAt(0)?.coerceToText(appContext)?.toString()
+        val current = clipboard.primaryClip
+            ?.takeIf { it.itemCount > 0 }
+            ?.getItemAt(0)
+            ?.coerceToText(appContext)
+            ?.toString()
         if (current == value) clipboard.clearPrimaryClip()
     }, 60_000)
 }
