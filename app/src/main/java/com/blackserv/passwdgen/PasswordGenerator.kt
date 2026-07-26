@@ -4,7 +4,7 @@ import java.security.SecureRandom
 import kotlin.math.ln
 
 internal data class PasswordOptions(
-    val length: Int = 20,
+    val length: Int = 16,
     val lowerCase: Boolean = true,
     val upperCase: Boolean = true,
     val digits: Boolean = true,
@@ -18,6 +18,9 @@ internal data class GeneratedPassword(
 )
 
 internal object PasswordGenerator {
+    const val MIN_LENGTH = 8
+    const val MAX_LENGTH = 32
+
     private const val LOWER = "abcdefghijklmnopqrstuvwxyz"
     private const val UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     private const val DIGITS = "0123456789"
@@ -28,7 +31,9 @@ internal object PasswordGenerator {
         options: PasswordOptions,
         random: SecureRandom = SecureRandom(),
     ): GeneratedPassword {
-        require(options.length in 8..128) { "Długość hasła musi mieścić się w zakresie 8–128." }
+        require(options.length in MIN_LENGTH..MAX_LENGTH) {
+            "Długość hasła musi mieścić się w zakresie $MIN_LENGTH–$MAX_LENGTH."
+        }
 
         val groups = buildList {
             if (options.lowerCase) add(filter(LOWER, options.avoidAmbiguous))
