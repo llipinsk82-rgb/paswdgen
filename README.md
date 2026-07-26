@@ -4,7 +4,7 @@ Androidowy generator haseł i lokalny sejf danych logowania.
 
 ## Status
 
-**MVP 0.1.0 — kompilowalny kod bazowy.** Testy jednostkowe, Android Lint i budowa debug APK przechodzą w CI dla Android SDK 36, JDK 17 i Gradle 8.13. Projekt nie jest jeszcze gotowy do publikacji w Google Play: przed wydaniem wymagane są testy na fizycznych urządzeniach, audyt kryptografii, procedura odzyskiwania sejfu, podpis release, materiały sklepu i finalna decyzja dotycząca identyfikatora pakietu.
+**MVP 0.1.0 — kompilowalny kod bazowy.** Testy jednostkowe, Android Lint, debug APK oraz niepodpisany release AAB przechodzą w CI dla Android SDK 36, JDK 17 i Gradle 8.13. Projekt nie jest jeszcze gotowy do publikacji w Google Play: przed wydaniem wymagane są testy na emulatorach i fizycznych urządzeniach, audyt kryptografii, procedura odzyskiwania sejfu, bezpieczny klucz podpisujący, materiały sklepu i finalna decyzja dotycząca identyfikatora pakietu.
 
 ## Funkcje MVP
 
@@ -46,7 +46,10 @@ Repozytorium zawiera Gradle Wrapper 8.13. Jego JAR oraz dystrybucja są przypię
 ./gradlew testDebugUnitTest
 ./gradlew lintDebug
 ./gradlew assembleDebug
+./gradlew bundleRelease
 ```
+
+`bundleRelease` tworzy niepodpisany AAB. Klucz upload nie jest i nie będzie przechowywany w repozytorium ani w artefaktach zwykłego CI.
 
 Awaryjne odtworzenie wrappera na zaufanej maszynie linuksowej:
 
