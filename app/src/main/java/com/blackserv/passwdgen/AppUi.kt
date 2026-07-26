@@ -3,6 +3,8 @@ package com.blackserv.passwdgen
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.os.PersistableBundle
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -48,7 +50,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,8 +59,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -129,7 +128,6 @@ private fun GeneratorScreen(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
 
     Column(
         modifier = modifier
@@ -158,7 +156,7 @@ private fun GeneratorScreen(
                     Button(onClick = onGenerate) { Text("Generuj") }
                     OutlinedButton(
                         onClick = {
-                            copySensitive(context, state.generated.value, scope)
+                            copySensitive(context, state.generated.value)
                             onMessage("Hasło skopiowane. Schowek zostanie wyczyszczony po 60 sekundach.")
                         },
                     ) { Text("Kopiuj") }
@@ -236,7 +234,6 @@ private fun VaultScreen(
     }
 
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var editingEntry by remember { mutableStateOf<VaultEntry?>(null) }
     var creatingEntry by remember { mutableStateOf(false) }
     var deletingEntry by remember { mutableStateOf<VaultEntry?>(null) }
@@ -289,11 +286,11 @@ private fun VaultScreen(
                         revealed = revealed[entry.id] == true,
                         onRevealChange = { revealed[entry.id] = it },
                         onCopyLogin = {
-                            copySensitive(context, entry.username, scope)
+                            copySensitive(context, entry.username)
                             onMessage("Login skopiowany.")
                         },
                         onCopyPassword = {
-                            copySensitive(context, entry.password, scope)
+                            copySensitive(context, entry.password)
                             onMessage("Hasło skopiowane. Schowek zostanie wyczyszczony po 60 sekundach.")
                         },
                         onEdit = { editingEntry = entry },
@@ -470,9 +467,9 @@ private fun EntryDialog(
 private fun copySensitive(
     context: Context,
     value: String,
-    scope: kotlinx.coroutines.CoroutineScope,
 ) {
-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    val appContext = context.applicationContext
+    val clipboard = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     val clip = ClipData.newPlainText("dane logowania", value).apply {
         description.extras = PersistableBundle().apply {
             putBoolean("android.content.extra.IS_SENSITIVE", true)
@@ -480,13 +477,12 @@ private fun copySensitive(
     }
     clipboard.setPrimaryClip(clip)
 
-    scope.launch {
-        delay(60_000)
+    Handler(Looper.getMainLooper()).postDelayed({
         val current = clipboard.primaryClip
             ?.takeIf { it.itemCount > 0 }
             ?.getItemAt(0)
-            ?.coerceToText(context)
+            ?.coerceToText(appContext)
             ?.toString()
         if (current == value) clipboard.clearPrimaryClip()
-    }
+    }, 60_000)
 }
