@@ -1,55 +1,225 @@
 package com.blackserv.passwdgen
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-private val PremiumGold = Color(0xFFFFD58A)
-private val PremiumGoldSoft = Color(0x33FFD58A)
-private val PremiumCyan = Color(0xFF35E7D0)
-private val PremiumSurface = Color(0xFF151C24)
-private val PremiumSurfaceRaised = Color(0xFF1D2631)
-private val PremiumStroke = Color(0xFF31404F)
+internal val PgBackground = Color(0xFF030B11)
+internal val PgSurface = Color(0xFF0A151E)
+internal val PgSurfaceRaised = Color(0xFF101E29)
+internal val PgStroke = Color(0xFF263B49)
+internal val PgStrokeStrong = Color(0xFF345365)
+internal val PgCyan = Color(0xFF22DDE5)
+internal val PgCyanBright = Color(0xFF48F5EF)
+internal val PgGreen = Color(0xFF23E58B)
+internal val PgText = Color(0xFFF2F8FA)
+internal val PgTextMuted = Color(0xFF91A7B3)
+internal val PgDanger = Color(0xFFFF6F7D)
+
+private val PanelShape = RoundedCornerShape(20.dp)
+
+@Composable
+internal fun PremiumAppBackground(content: @Composable BoxScope.() -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(Color(0xFF06121A), PgBackground, Color(0xFF02070B)),
+                ),
+            ),
+    ) {
+        Box(
+            Modifier
+                .size(260.dp)
+                .offset(x = (-110).dp, y = 80.dp)
+                .blur(90.dp)
+                .background(PgCyan.copy(alpha = 0.10f), CircleShape),
+        )
+        Box(
+            Modifier
+                .size(220.dp)
+                .align(Alignment.BottomEnd)
+                .offset(x = 90.dp, y = 55.dp)
+                .blur(90.dp)
+                .background(Color(0xFF2565D9).copy(alpha = 0.09f), CircleShape),
+        )
+        content()
+    }
+}
+
+@Composable
+internal fun PremiumTopBar(section: AppSection) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .height(62.dp)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Image(
+            painter = painterResource(R.drawable.passwdgen_brand_icon),
+            contentDescription = "PasswdGen",
+            modifier = Modifier.size(38.dp).clip(RoundedCornerShape(11.dp)),
+            contentScale = ContentScale.Crop,
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = if (section == AppSection.GENERATOR) "Generator" else "Sejf",
+                color = PgText,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text("PasswdGen · lokalna ochrona", color = PgTextMuted, fontSize = 11.sp)
+        }
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(PgSurfaceRaised)
+                .border(1.dp, PgStroke, RoundedCornerShape(12.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Outlined.Shield, contentDescription = null, tint = PgCyan, modifier = Modifier.size(21.dp))
+        }
+    }
+}
+
+@Composable
+internal fun PremiumBottomBar(section: AppSection, onSelect: (AppSection) -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .shadow(22.dp, RoundedCornerShape(24.dp))
+            .clip(RoundedCornerShape(24.dp))
+            .background(Color(0xF20A151E))
+            .border(1.dp, PgStroke, RoundedCornerShape(24.dp))
+            .padding(6.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BottomDestination(
+                label = "Generator",
+                icon = Icons.Outlined.AutoAwesome,
+                selected = section == AppSection.GENERATOR,
+                modifier = Modifier.weight(1f),
+                onClick = { onSelect(AppSection.GENERATOR) },
+            )
+            BottomDestination(
+                label = "Sejf",
+                icon = Icons.Outlined.Lock,
+                selected = section == AppSection.VAULT,
+                modifier = Modifier.weight(1f),
+                onClick = { onSelect(AppSection.VAULT) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun BottomDestination(
+    label: String,
+    icon: ImageVector,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (selected) PgCyan.copy(alpha = 0.13f) else Color.Transparent)
+            .border(
+                1.dp,
+                if (selected) PgCyan.copy(alpha = 0.38f) else Color.Transparent,
+                RoundedCornerShape(18.dp),
+            )
+            .clickable(onClick = onClick)
+            .padding(vertical = 11.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = if (selected) PgCyanBright else PgTextMuted, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(
+            label,
+            color = if (selected) PgText else PgTextMuted,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            fontSize = 13.sp,
+        )
+    }
+}
 
 @Composable
 internal fun PremiumGeneratorContent(
@@ -58,284 +228,342 @@ internal fun PremiumGeneratorContent(
     onGenerate: () -> Unit,
     onCopy: () -> Unit,
 ) {
-    var advancedVisible by remember { mutableStateOf(false) }
-
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        PasswordHeroCard(state = state, onCopy = onCopy)
+        LengthPanel(state = state, onOptionsChange = onOptionsChange)
+        CharacterOptionsPanel(state = state, onOptionsChange = onOptionsChange)
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+                onClick = onGenerate,
+                modifier = Modifier.weight(1f).height(52.dp),
+                shape = RoundedCornerShape(15.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = PgCyan, contentColor = Color(0xFF001517)),
+            ) {
+                Icon(Icons.Outlined.AutoAwesome, contentDescription = null, modifier = Modifier.size(19.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Generuj", fontWeight = FontWeight.Bold)
+            }
+            OutlinedButton(
+                onClick = onCopy,
+                modifier = Modifier.weight(1f).height(52.dp),
+                shape = RoundedCornerShape(15.dp),
+                border = BorderStroke(1.dp, PgStrokeStrong),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = PgText),
+            ) {
+                Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(19.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Kopiuj", fontWeight = FontWeight.SemiBold)
+            }
+        }
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column {
-                Text(
-                    text = "Generator",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    text = "Prywatnie. Lokalnie. Bez kompromisów.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Box(
-                modifier = Modifier
-                    .clip(CircleShape)
-                    .background(PremiumGoldSoft)
-                    .border(1.dp, PremiumGold.copy(alpha = 0.55f), CircleShape)
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-            ) {
-                Text("AES VAULT", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = PremiumGold)
-            }
+            Icon(Icons.Outlined.Shield, contentDescription = null, tint = PgTextMuted, modifier = Modifier.size(15.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("Schowek czyści się automatycznie po 60 s", color = PgTextMuted, fontSize = 11.sp)
         }
+    }
+}
 
-        Card(
+@Composable
+private fun PasswordHeroCard(state: AppUiState, onCopy: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().shadow(18.dp, PanelShape),
+        shape = PanelShape,
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+    ) {
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .shadow(20.dp, RoundedCornerShape(26.dp)),
-            shape = RoundedCornerShape(26.dp),
-            colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+                .background(
+                    Brush.linearGradient(
+                        listOf(Color(0xFF132A36), Color(0xFF0B1922), Color(0xFF101925)),
+                    ),
+                )
+                .border(1.dp, PgStrokeStrong, PanelShape)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Box(
-                modifier = Modifier
-                    .background(
-                        Brush.linearGradient(
-                            listOf(Color(0xFF1B3440), Color(0xFF16232D), Color(0xFF221D31)),
-                        ),
-                    )
-                    .border(1.dp, PremiumCyan.copy(alpha = 0.35f), RoundedCornerShape(26.dp))
-                    .padding(20.dp),
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            "WYGENEROWANE HASŁO",
-                            fontSize = 11.sp,
-                            letterSpacing = 1.2.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = PremiumCyan,
-                        )
-                        StrengthBadge(state.generated.entropyBits)
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(18.dp))
-                            .background(Color(0xCC0C1218))
-                            .border(1.dp, PremiumGold.copy(alpha = 0.28f), RoundedCornerShape(18.dp))
-                            .padding(horizontal = 16.dp, vertical = 18.dp),
-                    ) {
-                        Text(
-                            text = state.generated.value,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 22.sp,
-                            lineHeight = 28.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = PremiumGold,
-                        )
-                    }
-
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Wygenerowane hasło", color = PgTextMuted, fontSize = 12.sp)
+                    Spacer(Modifier.height(5.dp))
                     Text(
-                        text = "${state.generated.entropyBits} bitów entropii · ${state.options.length} znaków",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.White.copy(alpha = 0.68f),
-                    )
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Button(
-                            onClick = onGenerate,
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = PremiumCyan,
-                                contentColor = Color(0xFF071310),
-                            ),
-                        ) {
-                            Text("Nowe hasło", fontWeight = FontWeight.Bold)
-                        }
-                        OutlinedButton(
-                            onClick = onCopy,
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(14.dp),
-                        ) {
-                            Text("Kopiuj")
-                        }
-                    }
-                }
-            }
-        }
-
-        PremiumSectionCard(title = "Długość", trailing = "${state.options.length}") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(12, 16, 20, 24).forEach { preset ->
-                    LengthChip(
-                        value = preset,
-                        selected = state.options.length == preset,
-                        modifier = Modifier.weight(1f),
-                        onClick = { onOptionsChange { it.copy(length = preset) } },
+                        text = state.generated.value,
+                        color = PgText,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 21.sp,
+                        lineHeight = 26.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
-            }
-            Spacer(Modifier.height(8.dp))
-            Slider(
-                value = state.options.length.toFloat(),
-                onValueChange = { value ->
-                    onOptionsChange {
-                        it.copy(
-                            length = value.toInt().coerceIn(
-                                PasswordGenerator.MIN_LENGTH,
-                                PasswordGenerator.MAX_LENGTH,
-                            ),
-                        )
-                    }
-                },
-                valueRange = PasswordGenerator.MIN_LENGTH.toFloat()..PasswordGenerator.MAX_LENGTH.toFloat(),
-                steps = PasswordGenerator.MAX_LENGTH - PasswordGenerator.MIN_LENGTH - 1,
-            )
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("8", style = MaterialTheme.typography.labelSmall)
-                Text("zalecane 16–20", style = MaterialTheme.typography.labelSmall, color = PremiumCyan)
-                Text("32", style = MaterialTheme.typography.labelSmall)
-            }
-        }
-
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { advancedVisible = !advancedVisible },
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = PremiumSurface),
-            border = androidx.compose.foundation.BorderStroke(1.dp, PremiumStroke),
-        ) {
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
+                IconButton(
+                    onClick = onCopy,
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(RoundedCornerShape(13.dp))
+                        .background(PgSurface.copy(alpha = 0.82f))
+                        .border(1.dp, PgStroke, RoundedCornerShape(13.dp)),
                 ) {
-                    Column {
-                        Text("Zestawy znaków", fontWeight = FontWeight.SemiBold)
-                        Text(
-                            "Dostosuj skład hasła",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Text(if (advancedVisible) "−" else "+", fontSize = 24.sp, color = PremiumCyan)
+                    Icon(Icons.Outlined.ContentCopy, contentDescription = "Kopiuj hasło", tint = PgText, modifier = Modifier.size(20.dp))
                 }
-                if (advancedVisible) {
-                    HorizontalDivider(Modifier.padding(vertical = 10.dp), color = PremiumStroke)
-                    PremiumOptionRow("Małe litery", "a–z", state.options.lowerCase) {
-                        onOptionsChange { options -> options.copy(lowerCase = it) }
-                    }
-                    PremiumOptionRow("Wielkie litery", "A–Z", state.options.upperCase) {
-                        onOptionsChange { options -> options.copy(upperCase = it) }
-                    }
-                    PremiumOptionRow("Cyfry", "0–9", state.options.digits) {
-                        onOptionsChange { options -> options.copy(digits = it) }
-                    }
-                    PremiumOptionRow("Znaki specjalne", "!@#", state.options.special) {
-                        onOptionsChange { options -> options.copy(special = it) }
-                    }
-                    PremiumOptionRow("Pomijaj podobne", "I l 1 O 0", state.options.avoidAmbiguous) {
-                        onOptionsChange { options -> options.copy(avoidAmbiguous = it) }
-                    }
+            }
+            HorizontalDivider(color = PgStroke.copy(alpha = 0.8f))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Siła hasła", color = PgTextMuted, fontSize = 12.sp)
+                Spacer(Modifier.weight(1f))
+                Text(strengthLabel(state.generated.entropyBits), color = PgGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+            StrengthSegments(state.generated.entropyBits)
+        }
+    }
+}
+
+@Composable
+private fun StrengthSegments(bits: Int) {
+    val active = when {
+        bits >= 120 -> 5
+        bits >= 90 -> 4
+        bits >= 65 -> 3
+        bits >= 45 -> 2
+        else -> 1
+    }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        repeat(5) { index ->
+            Box(
+                Modifier
+                    .weight(1f)
+                    .height(7.dp)
+                    .clip(CircleShape)
+                    .background(if (index < active) PgGreen else PgStroke),
+            )
+        }
+    }
+}
+
+@Composable
+private fun LengthPanel(
+    state: AppUiState,
+    onOptionsChange: ((PasswordOptions) -> PasswordOptions) -> Unit,
+) {
+    PremiumPanel {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Długość hasła", color = PgText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.weight(1f))
+            Text("${state.options.length}", color = PgCyan, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text("  ·  8–32", color = PgTextMuted, fontSize = 11.sp)
+        }
+        Slider(
+            value = state.options.length.toFloat(),
+            onValueChange = { value ->
+                onOptionsChange {
+                    it.copy(length = value.toInt().coerceIn(PasswordGenerator.MIN_LENGTH, PasswordGenerator.MAX_LENGTH))
                 }
+            },
+            valueRange = PasswordGenerator.MIN_LENGTH.toFloat()..PasswordGenerator.MAX_LENGTH.toFloat(),
+            steps = PasswordGenerator.MAX_LENGTH - PasswordGenerator.MIN_LENGTH - 1,
+            colors = SliderDefaults.colors(
+                thumbColor = PgCyanBright,
+                activeTrackColor = PgCyan,
+                inactiveTrackColor = PgStroke,
+                activeTickColor = Color.Transparent,
+                inactiveTickColor = Color.Transparent,
+            ),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(12, 16, 20, 24, 32).forEach { preset ->
+                LengthChip(
+                    value = preset,
+                    selected = state.options.length == preset,
+                    modifier = Modifier.weight(1f),
+                    onClick = { onOptionsChange { it.copy(length = preset) } },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun PremiumSectionCard(
-    title: String,
-    trailing: String,
-    content: @Composable ColumnScope.() -> Unit,
+private fun CharacterOptionsPanel(
+    state: AppUiState,
+    onOptionsChange: ((PasswordOptions) -> PasswordOptions) -> Unit,
 ) {
+    PremiumPanel {
+        Text("Opcje znaków", color = PgText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        OptionToggleRow("a", "Małe litery", state.options.lowerCase) {
+            onOptionsChange { options -> options.copy(lowerCase = it) }
+        }
+        OptionToggleRow("A", "Wielkie litery", state.options.upperCase) {
+            onOptionsChange { options -> options.copy(upperCase = it) }
+        }
+        OptionToggleRow("1", "Cyfry", state.options.digits) {
+            onOptionsChange { options -> options.copy(digits = it) }
+        }
+        OptionToggleRow("#", "Znaki specjalne", state.options.special) {
+            onOptionsChange { options -> options.copy(special = it) }
+        }
+        OptionToggleRow("Ø", "Pomiń podobne", state.options.avoidAmbiguous) {
+            onOptionsChange { options -> options.copy(avoidAmbiguous = it) }
+        }
+    }
+}
+
+@Composable
+private fun PremiumPanel(content: @Composable ColumnScope.() -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = PremiumSurfaceRaised),
-        border = androidx.compose.foundation.BorderStroke(1.dp, PremiumStroke),
+        shape = PanelShape,
+        colors = CardDefaults.cardColors(containerColor = PgSurface.copy(alpha = 0.94f)),
+        border = BorderStroke(1.dp, PgStroke),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(title, fontWeight = FontWeight.SemiBold)
-                Text(trailing, fontWeight = FontWeight.Bold, color = PremiumGold)
-            }
-            content()
-        }
-    }
-}
-
-@Composable
-private fun StrengthBadge(bits: Int) {
-    val label = when {
-        bits >= 120 -> "BARDZO MOCNE"
-        bits >= 80 -> "MOCNE"
-        bits >= 60 -> "DOBRE"
-        else -> "PODSTAWOWE"
-    }
-    Box(
-        Modifier
-            .clip(RoundedCornerShape(50))
-            .background(PremiumCyan.copy(alpha = 0.12f))
-            .border(1.dp, PremiumCyan.copy(alpha = 0.45f), RoundedCornerShape(50))
-            .padding(horizontal = 10.dp, vertical = 5.dp),
-    ) {
-        Text(label, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = PremiumCyan)
-    }
-}
-
-@Composable
-private fun LengthChip(
-    value: Int,
-    selected: Boolean,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(if (selected) PremiumGold else Color.Transparent)
-            .border(
-                1.dp,
-                if (selected) PremiumGold else PremiumStroke,
-                RoundedCornerShape(14.dp),
-            )
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            "$value",
-            fontWeight = FontWeight.Bold,
-            color = if (selected) Color(0xFF17130C) else MaterialTheme.colorScheme.onSurface,
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 13.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            content = content,
         )
     }
 }
 
 @Composable
-private fun PremiumOptionRow(
-    title: String,
-    hint: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-) {
+private fun LengthChip(value: Int, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Box(
+        modifier = modifier
+            .height(38.dp)
+            .clip(RoundedCornerShape(11.dp))
+            .background(if (selected) PgCyan.copy(alpha = 0.14f) else PgSurfaceRaised)
+            .border(1.dp, if (selected) PgCyan else PgStroke, RoundedCornerShape(11.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            "$value",
+            color = if (selected) PgCyanBright else PgTextMuted,
+            fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+        )
+    }
+}
+
+@Composable
+private fun OptionToggleRow(symbol: String, title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(43.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(PgSurfaceRaised.copy(alpha = 0.78f))
+            .border(1.dp, PgStroke.copy(alpha = 0.8f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, fontWeight = FontWeight.Medium)
-            Text(hint, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Box(
+            modifier = Modifier
+                .size(27.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xFF071219))
+                .border(1.dp, PgStroke, RoundedCornerShape(8.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(symbol, color = PgCyan, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 13.sp)
         }
-        Checkbox(checked = checked, onCheckedChange = onCheckedChange)
+        Spacer(Modifier.width(10.dp))
+        Text(title, color = PgText, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color.White,
+                checkedTrackColor = PgCyan,
+                uncheckedThumbColor = PgTextMuted,
+                uncheckedTrackColor = PgStroke,
+                uncheckedBorderColor = PgStroke,
+            ),
+        )
+    }
+}
+
+@Composable
+internal fun PremiumLockedVault(vaultBusy: Boolean, onUnlockRequest: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Image(
+            painter = painterResource(R.drawable.passwdgen_brand_icon),
+            contentDescription = null,
+            modifier = Modifier.size(124.dp).clip(RoundedCornerShape(30.dp)).shadow(20.dp, RoundedCornerShape(30.dp)),
+            contentScale = ContentScale.Crop,
+        )
+        Text("Sejf jest zablokowany", color = PgText, fontSize = 23.sp, fontWeight = FontWeight.Bold)
+        Text(
+            "AES-256-GCM · Android Keystore\nDane pozostają lokalnie na urządzeniu",
+            color = PgTextMuted,
+            fontSize = 13.sp,
+            lineHeight = 19.sp,
+        )
+        Button(
+            onClick = onUnlockRequest,
+            enabled = !vaultBusy,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            shape = RoundedCornerShape(15.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = PgCyan, contentColor = Color(0xFF001517)),
+        ) {
+            if (vaultBusy) {
+                CircularProgressIndicator(Modifier.size(20.dp), color = Color(0xFF001517), strokeWidth = 2.dp)
+            } else {
+                Icon(Icons.Outlined.Lock, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Odblokuj sejf", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+internal fun PremiumVaultToolbar(
+    query: String,
+    visibleCount: Int,
+    totalCount: Int,
+    onSearchChange: (String) -> Unit,
+    onAdd: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        TextField(
+            value = query,
+            onValueChange = onSearchChange,
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("Szukaj", color = PgTextMuted) },
+            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = PgTextMuted) },
+            trailingIcon = { Icon(Icons.Outlined.Tune, contentDescription = null, tint = PgTextMuted) },
+            singleLine = true,
+            shape = RoundedCornerShape(16.dp),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = PgSurface,
+                unfocusedContainerColor = PgSurface,
+                disabledContainerColor = PgSurface,
+                focusedIndicatorColor = PgCyan,
+                unfocusedIndicatorColor = PgStroke,
+                cursorColor = PgCyan,
+                focusedTextColor = PgText,
+                unfocusedTextColor = PgText,
+            ),
+        )
+        OutlinedButton(
+            onClick = onAdd,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(15.dp),
+            border = BorderStroke(1.dp, PgCyan.copy(alpha = 0.78f)),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = PgCyanBright),
+        ) {
+            Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Dodaj wpis", fontWeight = FontWeight.SemiBold)
+        }
+        Text("$visibleCount z $totalCount wpisów", color = PgTextMuted, fontSize = 11.sp, modifier = Modifier.padding(start = 4.dp))
     }
 }
 
@@ -352,40 +580,23 @@ internal fun PremiumVaultRow(
     onDelete: () -> Unit,
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = PremiumSurfaceRaised),
-        border = androidx.compose.foundation.BorderStroke(1.dp, PremiumStroke),
+        modifier = Modifier.fillMaxWidth().animateContentSize(),
+        shape = PanelShape,
+        colors = CardDefaults.cardColors(containerColor = PgSurface.copy(alpha = 0.96f)),
+        border = BorderStroke(1.dp, PgStroke),
     ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+        Column(Modifier.padding(horizontal = 13.dp, vertical = 12.dp)) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onToggleExpanded),
+                modifier = Modifier.fillMaxWidth().clickable(onClick = onToggleExpanded),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(
-                            Brush.linearGradient(
-                                listOf(PremiumCyan.copy(alpha = 0.85f), Color(0xFF6685FF)),
-                            ),
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        entry.service.trim().firstOrNull()?.uppercase() ?: "•",
-                        fontWeight = FontWeight.Black,
-                        color = Color(0xFF071310),
-                    )
-                }
-                Spacer(Modifier.size(10.dp))
+                ServiceMark(entry.service)
+                Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
                         entry.service,
-                        style = MaterialTheme.typography.titleMedium,
+                        color = PgText,
+                        fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -393,46 +604,107 @@ internal fun PremiumVaultRow(
                     if (entry.website.isNotBlank()) {
                         Text(
                             entry.website,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = PgTextMuted,
+                            fontSize = 11.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
-                Text(if (expanded) "⌃" else "⌄", color = PremiumCyan, fontSize = 20.sp)
+                Icon(
+                    if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                    contentDescription = if (expanded) "Zwiń" else "Otwórz",
+                    tint = PgCyan,
+                )
             }
 
-            if (expanded) {
-                HorizontalDivider(Modifier.padding(vertical = 10.dp), color = PremiumStroke)
-                Text("LOGIN", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = PremiumCyan)
-                Text(entry.username, modifier = Modifier.padding(top = 2.dp, bottom = 8.dp))
-                Text("HASŁO", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = PremiumCyan)
-                Text(
-                    if (revealed) entry.password else "••••••••••••",
-                    fontFamily = FontFamily.Monospace,
-                    color = PremiumGold,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
+            AnimatedVisibility(expanded) {
+                Column {
+                    HorizontalDivider(Modifier.padding(vertical = 11.dp), color = PgStroke)
+                    CredentialLine("LOGIN", entry.username)
+                    Spacer(Modifier.height(9.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Pokaż", style = MaterialTheme.typography.bodySmall)
-                        Switch(checked = revealed, onCheckedChange = onRevealChange)
+                        Column(Modifier.weight(1f)) {
+                            Text("HASŁO", color = PgCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp)
+                            Text(
+                                if (revealed) entry.password else "••••••••••••",
+                                color = PgText,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 15.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        IconButton(onClick = { onRevealChange(!revealed) }) {
+                            Icon(
+                                if (revealed) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                                contentDescription = if (revealed) "Ukryj hasło" else "Pokaż hasło",
+                                tint = PgTextMuted,
+                            )
+                        }
                     }
-                    Row {
-                        TextButton(onClick = onCopyLogin) { Text("Login") }
-                        TextButton(onClick = onCopyPassword) { Text("Hasło") }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        VaultAction(Icons.Outlined.ContentCopy, "Login", onCopyLogin, Modifier.weight(1f))
+                        VaultAction(Icons.Outlined.ContentCopy, "Hasło", onCopyPassword, Modifier.weight(1f))
+                        VaultAction(Icons.Outlined.Edit, "Edytuj", onEdit, Modifier.weight(1f))
+                        VaultAction(Icons.Outlined.DeleteOutline, "Usuń", onDelete, Modifier.weight(1f), danger = true)
                     }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = onEdit) { Text("Edytuj") }
-                    TextButton(onClick = onDelete) { Text("Usuń") }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun ServiceMark(service: String) {
+    Box(
+        modifier = Modifier
+            .size(44.dp)
+            .shadow(10.dp, RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(14.dp))
+            .background(Brush.linearGradient(listOf(PgCyanBright, Color(0xFF1B87DF)))),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            service.trim().firstOrNull()?.uppercase() ?: "•",
+            color = Color(0xFF001517),
+            fontSize = 19.sp,
+            fontWeight = FontWeight.Black,
+        )
+    }
+}
+
+@Composable
+private fun CredentialLine(label: String, value: String) {
+    Column {
+        Text(label, color = PgCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp)
+        Text(value, color = PgText, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun VaultAction(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    danger: Boolean = false,
+) {
+    TextButton(
+        onClick = onClick,
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.textButtonColors(contentColor = if (danger) PgDanger else PgTextMuted),
+    ) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(17.dp))
+        Spacer(Modifier.width(4.dp))
+        Text(label, fontSize = 10.sp, maxLines = 1)
+    }
+}
+
+private fun strengthLabel(bits: Int): String = when {
+    bits >= 120 -> "Bardzo mocne"
+    bits >= 80 -> "Mocne"
+    bits >= 60 -> "Dobre"
+    else -> "Podstawowe"
 }
