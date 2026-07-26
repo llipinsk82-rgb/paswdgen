@@ -27,6 +27,8 @@ class MainActivity : FragmentActivity() {
                 )
             }
         }
+
+        GitHubUpdater.checkOnLaunch(this)
     }
 
     override fun onStop() {
