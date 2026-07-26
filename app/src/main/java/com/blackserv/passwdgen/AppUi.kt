@@ -210,10 +210,12 @@ private fun VaultScreen(
         }
         return
     }
+
     val context = LocalContext.current
     var editing by remember { mutableStateOf<VaultEntry?>(null) }
     var creating by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<VaultEntry?>(null) }
+    val expanded = remember { mutableStateMapOf<String, Boolean>() }
     val revealed = remember { mutableStateMapOf<String, Boolean>() }
     val filtered = remember(state.entries, state.searchQuery) {
         val q = state.searchQuery.trim().lowercase()
@@ -222,44 +224,58 @@ private fun VaultScreen(
                 it.username.lowercase().contains(q) || it.notes.lowercase().contains(q)
         }
     }
-    Column(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        Text("${state.entries.size} zapisanych wpisów", modifier = Modifier.padding(top = 12.dp))
+
+    Column(modifier.fillMaxSize().padding(horizontal = 12.dp)) {
         Row(
-            Modifier.fillMaxWidth().padding(vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             OutlinedTextField(
-                state.searchQuery, onSearchChange,
-                label = { Text("Szukaj po nazwie, domenie, loginie lub notatce") },
-                singleLine = true, modifier = Modifier.weight(1f),
+                value = state.searchQuery,
+                onValueChange = onSearchChange,
+                placeholder = { Text("Szukaj w sejfie") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
             )
-            Button(onClick = { creating = true }) { Text("Dodaj") }
+            Button(onClick = { creating = true }) { Text("+") }
         }
+        Text(
+            "${filtered.size} z ${state.entries.size} wpisów",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.secondary,
+            modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
+        )
         if (filtered.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(if (state.entries.isEmpty()) "Sejf jest pusty." else "Brak pasujących wpisów.")
             }
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxSize()) {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxSize()) {
                 items(filtered, key = VaultEntry::id) { entry ->
-                    VaultEntryCard(
-                        entry, revealed[entry.id] == true, { revealed[entry.id] = it },
-                        {
+                    CompactVaultEntryCard(
+                        entry = entry,
+                        expanded = expanded[entry.id] == true,
+                        revealed = revealed[entry.id] == true,
+                        onToggleExpanded = { expanded[entry.id] = expanded[entry.id] != true },
+                        onRevealChange = { revealed[entry.id] = it },
+                        onCopyLogin = {
                             copySensitive(context, entry.username)
                             onMessage("Login skopiowany. Schowek wyczyści się po 60 sekundach.")
                         },
-                        {
+                        onCopyPassword = {
                             copySensitive(context, entry.password)
                             onMessage("Hasło skopiowane. Schowek wyczyści się po 60 sekundach.")
                         },
-                        { editing = entry }, { deleting = entry },
+                        onEdit = { editing = entry },
+                        onDelete = { deleting = entry },
                     )
                 }
-                item { Spacer(Modifier.height(16.dp)) }
+                item { Spacer(Modifier.height(12.dp)) }
             }
         }
     }
+
     if (creating) EntryDialog(null, onUseGenerated, { creating = false }) { creating = false; onSave(it) }
     editing?.let { entry -> EntryDialog(entry, onUseGenerated, { editing = null }) { editing = null; onSave(it) } }
     deleting?.let { entry ->
@@ -273,9 +289,11 @@ private fun VaultScreen(
 }
 
 @Composable
-private fun VaultEntryCard(
+private fun CompactVaultEntryCard(
     entry: VaultEntry,
+    expanded: Boolean,
     revealed: Boolean,
+    onToggleExpanded: () -> Unit,
     onRevealChange: (Boolean) -> Unit,
     onCopyLogin: () -> Unit,
     onCopyPassword: () -> Unit,
@@ -283,27 +301,51 @@ private fun VaultEntryCard(
     onDelete: () -> Unit,
 ) {
     Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(entry.service, style = MaterialTheme.typography.titleLarge)
-            if (entry.website.isNotBlank()) Text(entry.website, color = MaterialTheme.colorScheme.secondary)
-            Text(entry.username, style = MaterialTheme.typography.bodyLarge)
-            Text(
-                if (revealed) entry.password else "•".repeat(entry.password.length.coerceAtMost(24)),
-                fontFamily = FontFamily.Monospace,
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Pokaż hasło")
-                Spacer(Modifier.width(8.dp))
-                Switch(revealed, onRevealChange)
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(entry.service, style = MaterialTheme.typography.titleMedium)
+                    if (entry.website.isNotBlank()) {
+                        Text(
+                            entry.website,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.secondary,
+                            maxLines = 1,
+                        )
+                    }
+                }
+                TextButton(onClick = onToggleExpanded) { Text(if (expanded) "Zwiń" else "Otwórz") }
             }
-            HorizontalDivider()
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onCopyLogin) { Text("Kopiuj login") }
-                Button(onClick = onCopyPassword) { Text("Kopiuj hasło") }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onEdit) { Text("Edytuj") }
-                TextButton(onClick = onDelete) { Text("Usuń") }
+            if (expanded) {
+                HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                Text("Login", style = MaterialTheme.typography.labelMedium)
+                Text(entry.username, style = MaterialTheme.typography.bodyLarge)
+                Spacer(Modifier.height(6.dp))
+                Text("Hasło", style = MaterialTheme.typography.labelMedium)
+                Text(
+                    if (revealed) entry.password else "••••••••••••",
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Pokaż", style = MaterialTheme.typography.bodySmall)
+                        Spacer(Modifier.width(6.dp))
+                        Switch(revealed, onRevealChange)
+                    }
+                    Row {
+                        TextButton(onClick = onCopyLogin) { Text("Kopiuj login") }
+                        TextButton(onClick = onCopyPassword) { Text("Kopiuj hasło") }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(onClick = onEdit) { Text("Edytuj") }
+                    TextButton(onClick = onDelete) { Text("Usuń") }
+                }
             }
         }
     }
