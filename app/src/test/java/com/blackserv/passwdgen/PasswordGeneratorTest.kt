@@ -10,7 +10,7 @@ class PasswordGeneratorTest {
     fun generatedPasswordHasRequestedLengthAndEverySelectedGroup() {
         val result = PasswordGenerator.generate(
             PasswordOptions(
-                length = 64,
+                length = 32,
                 lowerCase = true,
                 upperCase = true,
                 digits = true,
@@ -19,22 +19,29 @@ class PasswordGeneratorTest {
             ),
         )
 
-        assertEquals(64, result.value.length)
+        assertEquals(32, result.value.length)
         assertTrue(result.value.any(Char::isLowerCase))
         assertTrue(result.value.any(Char::isUpperCase))
         assertTrue(result.value.any(Char::isDigit))
         assertTrue(result.value.any { !it.isLetterOrDigit() })
-        assertTrue(result.entropyBits > 300)
+        assertTrue(result.entropyBits > 180)
     }
 
     @Test
     fun ambiguousCharactersCanBeExcluded() {
         repeat(100) {
             val result = PasswordGenerator.generate(
-                PasswordOptions(length = 128, avoidAmbiguous = true),
+                PasswordOptions(length = PasswordGenerator.MAX_LENGTH, avoidAmbiguous = true),
             )
             assertFalse(result.value.any { it in "Il1O0o|`'\"" })
         }
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun passwordsLongerThanMaximumAreRejected() {
+        PasswordGenerator.generate(
+            PasswordOptions(length = PasswordGenerator.MAX_LENGTH + 1),
+        )
     }
 
     @Test(expected = IllegalArgumentException::class)
