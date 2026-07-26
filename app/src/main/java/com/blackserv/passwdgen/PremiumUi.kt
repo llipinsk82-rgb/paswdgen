@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -63,9 +62,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -100,23 +100,24 @@ internal fun PremiumAppBackground(content: @Composable BoxScope.() -> Unit) {
                 Brush.verticalGradient(
                     colors = listOf(Color(0xFF06121A), PgBackground, Color(0xFF02070B)),
                 ),
-            ),
+            )
+            .drawWithCache {
+                val cyanGlow = Brush.radialGradient(
+                    colors = listOf(PgCyan.copy(alpha = 0.07f), Color.Transparent),
+                    center = Offset(size.width * 0.04f, size.height * 0.27f),
+                    radius = size.minDimension * 0.92f,
+                )
+                val blueGlow = Brush.radialGradient(
+                    colors = listOf(Color(0xFF2565D9).copy(alpha = 0.055f), Color.Transparent),
+                    center = Offset(size.width * 0.96f, size.height * 0.84f),
+                    radius = size.minDimension * 0.78f,
+                )
+                onDrawBehind {
+                    drawRect(cyanGlow)
+                    drawRect(blueGlow)
+                }
+            },
     ) {
-        Box(
-            Modifier
-                .size(260.dp)
-                .offset(x = (-110).dp, y = 80.dp)
-                .blur(90.dp)
-                .background(PgCyan.copy(alpha = 0.10f), CircleShape),
-        )
-        Box(
-            Modifier
-                .size(220.dp)
-                .align(Alignment.BottomEnd)
-                .offset(x = 90.dp, y = 55.dp)
-                .blur(90.dp)
-                .background(Color(0xFF2565D9).copy(alpha = 0.09f), CircleShape),
-        )
         content()
     }
 }
