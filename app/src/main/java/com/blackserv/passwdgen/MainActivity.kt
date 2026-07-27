@@ -11,15 +11,23 @@ import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
 import com.blackserv.passwdgen.ui.theme.PasswdGenTheme
 
 class MainActivity : FragmentActivity() {
     private val viewModel: MainViewModel by viewModels()
     private val lockHandler = Handler(Looper.getMainLooper())
     private var externalFlowActive = false
+
     private val externalFlowTimeout = Runnable {
         externalFlowActive = false
         viewModel.lockVault()
+    }
+
+    private val externalFlowReturnLock = Runnable {
+        if (!externalFlowActive && !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            viewModel.lockVault()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -44,6 +52,7 @@ class MainActivity : FragmentActivity() {
     override fun onStart() {
         super.onStart()
         lockHandler.removeCallbacks(externalFlowTimeout)
+        lockHandler.removeCallbacks(externalFlowReturnLock)
     }
 
     override fun onStop() {
@@ -58,6 +67,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onDestroy() {
         lockHandler.removeCallbacks(externalFlowTimeout)
+        lockHandler.removeCallbacks(externalFlowReturnLock)
         super.onDestroy()
     }
 
@@ -80,8 +90,17 @@ class MainActivity : FragmentActivity() {
     private fun setExternalFlowActive(active: Boolean) {
         externalFlowActive = active
         lockHandler.removeCallbacks(externalFlowTimeout)
-        if (!active && !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) {
-            viewModel.lockVault()
+        lockHandler.removeCallbacks(externalFlowReturnLock)
+
+        if (!active && !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            // ActivityResult może zostać dostarczony chwilę przed onStart().
+            // Nie blokujemy sejfu natychmiast, ponieważ usunęłoby to wybrany URI
+            // i dialog hasła kopii. Jeśli aplikacja faktycznie nie wróci na ekran,
+            // krótki bezpiecznik nadal zamknie sejf.
+            lockHandler.postDelayed(
+                externalFlowReturnLock,
+                EXTERNAL_FLOW_RETURN_GRACE_MILLIS,
+            )
         }
     }
 
@@ -137,5 +156,6 @@ class MainActivity : FragmentActivity() {
 
     private companion object {
         const val EXTERNAL_FLOW_TIMEOUT_MILLIS = 5 * 60 * 1_000L
+        const val EXTERNAL_FLOW_RETURN_GRACE_MILLIS = 15_000L
     }
 }
