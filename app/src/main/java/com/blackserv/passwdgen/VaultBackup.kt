@@ -1,10 +1,13 @@
 package com.blackserv.passwdgen
 
-import org.json.JSONArray
-import org.json.JSONObject
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
 import java.security.GeneralSecurityException
 import java.security.SecureRandom
-import java.util.Base64
 import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.SecretKeyFactory
@@ -13,8 +16,13 @@ import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 
 internal object VaultBackupCodec {
-    private const val MAGIC = "PASSWDGEN-BACKUP"
+    private val MAGIC = "PASSWDGEN-BACKUP".encodeToByteArray()
+    internal const val MAGIC_SIZE = 16
+
     private const val FORMAT_VERSION = 1
+    private const val PAYLOAD_VERSION = 1
+    private const val KDF_ID_PBKDF2_SHA256 = 1
+    private const val CIPHER_ID_AES_256_GCM = 1
     private const val KDF_NAME = "PBKDF2-HMAC-SHA256"
     private const val CIPHER_NAME = "AES-256-GCM"
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
@@ -35,8 +43,10 @@ internal object VaultBackupCodec {
     internal const val MIME_TYPE = "application/vnd.blackserv.passwdgen.vault-backup"
 
     private val random = SecureRandom()
-    private val encoder = Base64.getEncoder()
-    private val decoder = Base64.getDecoder()
+
+    init {
+        check(MAGIC.size == MAGIC_SIZE)
+    }
 
     fun encode(
         entries: List<VaultEntry>,
@@ -65,18 +75,24 @@ internal object VaultBackupCodec {
             cipher.updateAAD(aad)
             val cipherText = cipher.doFinal(plainText)
 
-            JSONObject()
-                .put("magic", MAGIC)
-                .put("version", FORMAT_VERSION)
-                .put("kdf", KDF_NAME)
-                .put("iterations", iterations)
-                .put("salt", encoder.encodeToString(salt))
-                .put("cipher", CIPHER_NAME)
-                .put("iv", encoder.encodeToString(iv))
-                .put("payload", encoder.encodeToString(cipherText))
-                .toString()
-                .encodeToByteArray()
-                .also { require(it.size <= MAX_BACKUP_BYTES) { "Kopia jest zbyt duża." } }
+            ByteArrayOutputStream().use { buffer ->
+                DataOutputStream(buffer).use { output ->
+                    output.write(MAGIC)
+                    output.writeInt(FORMAT_VERSION)
+                    output.writeInt(KDF_ID_PBKDF2_SHA256)
+                    output.writeInt(iterations)
+                    output.writeInt(salt.size)
+                    output.write(salt)
+                    output.writeInt(CIPHER_ID_AES_256_GCM)
+                    output.writeInt(iv.size)
+                    output.write(iv)
+                    output.writeInt(cipherText.size)
+                    output.write(cipherText)
+                }
+                buffer.toByteArray().also {
+                    require(it.size <= MAX_BACKUP_BYTES) { "Kopia jest zbyt duża." }
+                }
+            }
         } finally {
             plainText.fill(0)
             keyBytes.fill(0)
@@ -87,35 +103,45 @@ internal object VaultBackupCodec {
         validatePassphrase(passphrase)
         require(data.isNotEmpty() && data.size <= MAX_BACKUP_BYTES) { "Nieprawidłowy rozmiar kopii." }
 
-        val envelope = runCatching { JSONObject(data.decodeToString()) }
-            .getOrElse { throw IllegalArgumentException("Plik nie jest prawidłową kopią PasswdGen.") }
+        val envelope = try {
+            DataInputStream(ByteArrayInputStream(data)).use { input ->
+                val magic = ByteArray(MAGIC_SIZE).also(input::readFully)
+                require(magic.contentEquals(MAGIC)) { "Plik nie jest kopią PasswdGen." }
 
-        require(envelope.optString("magic") == MAGIC) { "Plik nie jest kopią PasswdGen." }
-        val version = envelope.optInt("version", -1)
-        require(version == FORMAT_VERSION) { "Nieobsługiwana wersja kopii: $version." }
-        require(envelope.optString("kdf") == KDF_NAME) { "Nieobsługiwany algorytm KDF." }
-        require(envelope.optString("cipher") == CIPHER_NAME) { "Nieobsługiwany algorytm szyfrowania." }
+                val version = input.readInt()
+                require(version == FORMAT_VERSION) { "Nieobsługiwana wersja kopii: $version." }
+                require(input.readInt() == KDF_ID_PBKDF2_SHA256) { "Nieobsługiwany algorytm KDF." }
 
-        val iterations = envelope.optInt("iterations", -1)
-        require(iterations in MIN_ACCEPTED_ITERATIONS..MAX_ACCEPTED_ITERATIONS) {
-            "Nieprawidłowy parametr zabezpieczenia kopii."
+                val iterations = input.readInt()
+                require(iterations in MIN_ACCEPTED_ITERATIONS..MAX_ACCEPTED_ITERATIONS) {
+                    "Nieprawidłowy parametr zabezpieczenia kopii."
+                }
+
+                val salt = input.readSizedBytes(expectedSize = SALT_BYTES, maxSize = SALT_BYTES)
+                require(input.readInt() == CIPHER_ID_AES_256_GCM) { "Nieobsługiwany algorytm szyfrowania." }
+                val iv = input.readSizedBytes(expectedSize = IV_BYTES, maxSize = IV_BYTES)
+                val cipherText = input.readSizedBytes(expectedSize = null, maxSize = MAX_BACKUP_BYTES)
+                require(cipherText.size >= 16) { "Uszkodzona zawartość kopii." }
+                require(input.available() == 0) { "Kopia zawiera nieoczekiwane dane." }
+
+                BackupEnvelope(version, iterations, salt, iv, cipherText)
+            }
+        } catch (error: IllegalArgumentException) {
+            throw error
+        } catch (error: Exception) {
+            throw IllegalArgumentException("Plik nie jest prawidłową kopią PasswdGen.", error)
         }
 
-        val salt = decodeBase64(envelope, "salt", SALT_BYTES)
-        val iv = decodeBase64(envelope, "iv", IV_BYTES)
-        val cipherText = decodeBase64(envelope, "payload", expectedSize = null)
-        require(cipherText.size >= 16 && cipherText.size <= MAX_BACKUP_BYTES) { "Uszkodzona zawartość kopii." }
-
-        val keyBytes = deriveKey(passphrase, salt, iterations)
+        val keyBytes = deriveKey(passphrase, envelope.salt, envelope.iterations)
         val plainText = try {
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(
                 Cipher.DECRYPT_MODE,
                 SecretKeySpec(keyBytes, "AES"),
-                GCMParameterSpec(GCM_TAG_BITS, iv),
+                GCMParameterSpec(GCM_TAG_BITS, envelope.iv),
             )
-            cipher.updateAAD(associatedData(version, iterations))
-            cipher.doFinal(cipherText)
+            cipher.updateAAD(associatedData(envelope.version, envelope.iterations))
+            cipher.doFinal(envelope.cipherText)
         } catch (error: AEADBadTagException) {
             throw IllegalArgumentException("Nieprawidłowe hasło kopii lub uszkodzony plik.", error)
         } catch (error: GeneralSecurityException) {
@@ -131,56 +157,59 @@ internal object VaultBackupCodec {
         }
     }
 
-    private fun encodePayload(entries: List<VaultEntry>): ByteArray {
-        val array = JSONArray()
-        entries.forEach { entry ->
-            array.put(
-                JSONObject()
-                    .put("id", entry.id)
-                    .put("service", entry.service)
-                    .put("website", entry.website)
-                    .put("username", entry.username)
-                    .put("password", entry.password)
-                    .put("notes", entry.notes)
-                    .put("createdAt", entry.createdAt)
-                    .put("updatedAt", entry.updatedAt),
-            )
+    private fun encodePayload(entries: List<VaultEntry>): ByteArray = ByteArrayOutputStream().use { buffer ->
+        DataOutputStream(buffer).use { output ->
+            output.writeInt(PAYLOAD_VERSION)
+            output.writeLong(System.currentTimeMillis())
+            output.writeInt(entries.size)
+            entries.forEach { entry ->
+                output.writeText(entry.id, 128)
+                output.writeText(entry.service, 512)
+                output.writeText(entry.website, 2_048)
+                output.writeText(entry.username, 1_024)
+                output.writeText(entry.password, 4_096)
+                output.writeText(entry.notes, 32_768)
+                output.writeLong(entry.createdAt)
+                output.writeLong(entry.updatedAt)
+            }
         }
-        return JSONObject()
-            .put("version", FORMAT_VERSION)
-            .put("exportedAt", System.currentTimeMillis())
-            .put("entries", array)
-            .toString()
-            .encodeToByteArray()
+        buffer.toByteArray()
     }
 
     private fun decodePayload(plainText: ByteArray): List<VaultEntry> {
-        val payload = runCatching { JSONObject(plainText.decodeToString()) }
-            .getOrElse { throw IllegalArgumentException("Uszkodzona zawartość kopii.") }
-        require(payload.optInt("version", -1) == FORMAT_VERSION) { "Nieobsługiwana zawartość kopii." }
+        return try {
+            DataInputStream(ByteArrayInputStream(plainText)).use { input ->
+                require(input.readInt() == PAYLOAD_VERSION) { "Nieobsługiwana zawartość kopii." }
+                require(input.readLong() > 0L) { "Nieprawidłowa data utworzenia kopii." }
+                val count = input.readInt()
+                require(count in 0..MAX_ENTRIES) { "Kopia zawiera zbyt wiele wpisów." }
 
-        val array = payload.optJSONArray("entries")
-            ?: throw IllegalArgumentException("Kopia nie zawiera listy wpisów.")
-        require(array.length() <= MAX_ENTRIES) { "Kopia zawiera zbyt wiele wpisów." }
-
-        val ids = HashSet<String>(array.length())
-        return buildList(array.length()) {
-            for (index in 0 until array.length()) {
-                val value = array.getJSONObject(index)
-                val entry = VaultEntry(
-                    id = requiredText(value, "id", 128),
-                    service = requiredText(value, "service", 512),
-                    website = optionalText(value, "website", 2_048),
-                    username = requiredText(value, "username", 1_024),
-                    password = requiredText(value, "password", 4_096),
-                    notes = optionalText(value, "notes", 32_768),
-                    createdAt = validTimestamp(value, "createdAt"),
-                    updatedAt = validTimestamp(value, "updatedAt"),
-                )
-                require(ids.add(entry.id)) { "Kopia zawiera zduplikowany identyfikator wpisu." }
-                require(entry.updatedAt >= entry.createdAt) { "Kopia zawiera nieprawidłowe daty wpisu." }
-                add(entry)
+                val ids = HashSet<String>(count)
+                val entries = ArrayList<VaultEntry>(count)
+                repeat(count) {
+                    val entry = VaultEntry(
+                        id = input.readText(128, required = true),
+                        service = input.readText(512, required = true),
+                        website = input.readText(2_048, required = false),
+                        username = input.readText(1_024, required = true),
+                        password = input.readText(4_096, required = true),
+                        notes = input.readText(32_768, required = false),
+                        createdAt = input.readLong(),
+                        updatedAt = input.readLong(),
+                    )
+                    require(ids.add(entry.id)) { "Kopia zawiera zduplikowany identyfikator wpisu." }
+                    require(entry.createdAt > 0L && entry.updatedAt >= entry.createdAt) {
+                        "Kopia zawiera nieprawidłowe daty wpisu."
+                    }
+                    entries += entry
+                }
+                require(input.available() == 0) { "Kopia zawiera nieoczekiwane dane." }
+                entries
             }
+        } catch (error: IllegalArgumentException) {
+            throw error
+        } catch (error: Exception) {
+            throw IllegalArgumentException("Uszkodzona zawartość kopii.", error)
         }
     }
 
@@ -196,33 +225,30 @@ internal object VaultBackupCodec {
     }
 
     private fun associatedData(version: Int, iterations: Int): ByteArray =
-        "$MAGIC|$version|$KDF_NAME|$iterations|$CIPHER_NAME".encodeToByteArray()
+        "PASSWDGEN-BACKUP|$version|$KDF_NAME|$iterations|$CIPHER_NAME".encodeToByteArray()
 
-    private fun decodeBase64(envelope: JSONObject, name: String, expectedSize: Int?): ByteArray {
-        val value = envelope.optString(name)
-        require(value.isNotBlank()) { "Brak pola kopii: $name." }
-        val decoded = runCatching { decoder.decode(value) }
-            .getOrElse { throw IllegalArgumentException("Nieprawidłowe pole kopii: $name.") }
-        if (expectedSize != null) require(decoded.size == expectedSize) { "Nieprawidłowe pole kopii: $name." }
-        return decoded
+    private fun DataOutputStream.writeText(value: String, maxBytes: Int) {
+        val bytes = value.encodeToByteArray()
+        require(bytes.size <= maxBytes) { "Pole wpisu jest zbyt długie." }
+        writeInt(bytes.size)
+        write(bytes)
     }
 
-    private fun requiredText(value: JSONObject, name: String, maxLength: Int): String {
-        val text = value.optString(name)
-        require(text.isNotBlank() && text.length <= maxLength) { "Nieprawidłowe pole wpisu: $name." }
-        return text
+    private fun DataInputStream.readText(maxBytes: Int, required: Boolean): String {
+        val bytes = readSizedBytes(expectedSize = null, maxSize = maxBytes)
+        val decoder = Charsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+        val value = decoder.decode(ByteBuffer.wrap(bytes)).toString()
+        if (required) require(value.isNotBlank()) { "Kopia zawiera puste wymagane pole wpisu." }
+        return value
     }
 
-    private fun optionalText(value: JSONObject, name: String, maxLength: Int): String {
-        val text = value.optString(name)
-        require(text.length <= maxLength) { "Pole wpisu jest zbyt długie: $name." }
-        return text
-    }
-
-    private fun validTimestamp(value: JSONObject, name: String): Long {
-        val timestamp = value.optLong(name, -1L)
-        require(timestamp > 0L) { "Nieprawidłowa data wpisu: $name." }
-        return timestamp
+    private fun DataInputStream.readSizedBytes(expectedSize: Int?, maxSize: Int): ByteArray {
+        val size = readInt()
+        require(size >= 0 && size <= maxSize) { "Nieprawidłowa długość pola kopii." }
+        if (expectedSize != null) require(size == expectedSize) { "Nieprawidłowa długość pola kopii." }
+        return ByteArray(size).also(::readFully)
     }
 
     private fun validatePassphrase(passphrase: String) {
@@ -230,4 +256,12 @@ internal object VaultBackupCodec {
             "Hasło kopii musi mieć od $MIN_PASSPHRASE_LENGTH do $MAX_PASSPHRASE_LENGTH znaków."
         }
     }
+
+    private data class BackupEnvelope(
+        val version: Int,
+        val iterations: Int,
+        val salt: ByteArray,
+        val iv: ByteArray,
+        val cipherText: ByteArray,
+    )
 }
