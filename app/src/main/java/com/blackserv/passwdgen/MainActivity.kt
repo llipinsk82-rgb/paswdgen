@@ -1,6 +1,8 @@
 package com.blackserv.passwdgen
 
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -13,6 +15,12 @@ import com.blackserv.passwdgen.ui.theme.PasswdGenTheme
 
 class MainActivity : FragmentActivity() {
     private val viewModel: MainViewModel by viewModels()
+    private val lockHandler = Handler(Looper.getMainLooper())
+    private var externalFlowActive = false
+    private val externalFlowTimeout = Runnable {
+        externalFlowActive = false
+        viewModel.lockVault()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -24,6 +32,8 @@ class MainActivity : FragmentActivity() {
                 PasswdGenApp(
                     viewModel = viewModel,
                     onUnlockRequest = ::requestVaultUnlock,
+                    onSensitiveActionRequest = ::requestSensitiveAction,
+                    onExternalFlowChanged = ::setExternalFlowActive,
                 )
             }
         }
@@ -31,12 +41,55 @@ class MainActivity : FragmentActivity() {
         GitHubUpdater.checkOnLaunch(this)
     }
 
+    override fun onStart() {
+        super.onStart()
+        lockHandler.removeCallbacks(externalFlowTimeout)
+    }
+
     override fun onStop() {
         super.onStop()
-        viewModel.lockVault()
+        if (externalFlowActive) {
+            lockHandler.removeCallbacks(externalFlowTimeout)
+            lockHandler.postDelayed(externalFlowTimeout, EXTERNAL_FLOW_TIMEOUT_MILLIS)
+        } else {
+            viewModel.lockVault()
+        }
+    }
+
+    override fun onDestroy() {
+        lockHandler.removeCallbacks(externalFlowTimeout)
+        super.onDestroy()
     }
 
     private fun requestVaultUnlock() {
+        requestAuthentication(
+            title = "Odblokuj sejf",
+            subtitle = "Potwierdź tożsamość biometrią lub kodem urządzenia",
+            onSuccess = viewModel::unlockVault,
+        )
+    }
+
+    private fun requestSensitiveAction(title: String, action: () -> Unit) {
+        requestAuthentication(
+            title = title,
+            subtitle = "Potwierdź tożsamość przed operacją na hasłach",
+            onSuccess = action,
+        )
+    }
+
+    private fun setExternalFlowActive(active: Boolean) {
+        externalFlowActive = active
+        lockHandler.removeCallbacks(externalFlowTimeout)
+        if (!active && !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) {
+            viewModel.lockVault()
+        }
+    }
+
+    private fun requestAuthentication(
+        title: String,
+        subtitle: String,
+        onSuccess: () -> Unit,
+    ) {
         val authenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG or
             BiometricManager.Authenticators.DEVICE_CREDENTIAL
 
@@ -58,7 +111,7 @@ class MainActivity : FragmentActivity() {
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     super.onAuthenticationSucceeded(result)
-                    viewModel.unlockVault()
+                    onSuccess()
                 }
 
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
@@ -74,11 +127,15 @@ class MainActivity : FragmentActivity() {
 
         prompt.authenticate(
             BiometricPrompt.PromptInfo.Builder()
-                .setTitle("Odblokuj sejf")
-                .setSubtitle("Potwierdź tożsamość biometrią lub kodem urządzenia")
+                .setTitle(title)
+                .setSubtitle(subtitle)
                 .setAllowedAuthenticators(authenticators)
                 .setConfirmationRequired(true)
                 .build(),
         )
+    }
+
+    private companion object {
+        const val EXTERNAL_FLOW_TIMEOUT_MILLIS = 5 * 60 * 1_000L
     }
 }
