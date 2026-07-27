@@ -144,6 +144,22 @@ private class VaultDatabase(context: Context) : SQLiteOpenHelper(
     }
 
     fun upsert(record: EncryptedRecord) {
+        upsert(writableDatabase, record)
+    }
+
+    fun upsertAll(records: List<EncryptedRecord>) {
+        if (records.isEmpty()) return
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            records.forEach { upsert(db, it) }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    private fun upsert(db: SQLiteDatabase, record: EncryptedRecord) {
         val values = ContentValues().apply {
             put("id", record.id)
             put("cipher_text", record.cipherText)
@@ -151,7 +167,7 @@ private class VaultDatabase(context: Context) : SQLiteOpenHelper(
             put("created_at", record.createdAt)
             put("updated_at", record.updatedAt)
         }
-        writableDatabase.insertWithOnConflict(
+        db.insertWithOnConflict(
             "vault_entries",
             null,
             values,
@@ -185,31 +201,51 @@ internal class VaultRepository(context: Context) {
     }
 
     fun save(entry: VaultEntry) {
+        val normalized = normalize(entry, updatedAt = System.currentTimeMillis())
+        database.upsert(encrypt(normalized))
+    }
+
+    fun importEntries(entries: List<VaultEntry>): Int {
+        require(entries.size <= 10_000) { "Kopia zawiera zbyt wiele wpisów." }
+        val currentById = loadAll().associateBy(VaultEntry::id)
+        val accepted = entries.map { normalize(it, updatedAt = it.updatedAt) }
+            .filter { imported ->
+                val current = currentById[imported.id]
+                current == null || imported.updatedAt > current.updatedAt
+            }
+        database.upsertAll(accepted.map(::encrypt))
+        return accepted.size
+    }
+
+    fun delete(id: String) = database.delete(id)
+
+    private fun normalize(entry: VaultEntry, updatedAt: Long): VaultEntry {
+        require(entry.id.isNotBlank() && entry.id.length <= 128) { "Nieprawidłowy identyfikator wpisu." }
         require(entry.service.isNotBlank()) { "Nazwa usługi jest wymagana." }
         require(entry.username.isNotBlank()) { "Login jest wymagany." }
         require(entry.password.isNotBlank()) { "Hasło jest wymagane." }
+        require(entry.createdAt > 0L && updatedAt >= entry.createdAt) { "Nieprawidłowe daty wpisu." }
 
-        val normalized = entry.copy(
+        return entry.copy(
             service = entry.service.trim(),
             website = entry.website.trim(),
             username = entry.username.trim(),
             notes = entry.notes.trim(),
-            updatedAt = System.currentTimeMillis(),
-        )
-        val payload = encode(normalized)
-        val encrypted = crypto.encrypt(payload.encodeToByteArray(), normalized.id.encodeToByteArray())
-        database.upsert(
-            EncryptedRecord(
-                id = normalized.id,
-                cipherText = encrypted.cipherText,
-                iv = encrypted.iv,
-                createdAt = normalized.createdAt,
-                updatedAt = normalized.updatedAt,
-            ),
+            updatedAt = updatedAt,
         )
     }
 
-    fun delete(id: String) = database.delete(id)
+    private fun encrypt(entry: VaultEntry): EncryptedRecord {
+        val payload = encode(entry)
+        val encrypted = crypto.encrypt(payload.encodeToByteArray(), entry.id.encodeToByteArray())
+        return EncryptedRecord(
+            id = entry.id,
+            cipherText = encrypted.cipherText,
+            iv = encrypted.iv,
+            createdAt = entry.createdAt,
+            updatedAt = entry.updatedAt,
+        )
+    }
 
     private fun encode(entry: VaultEntry): String = JSONObject()
         .put("service", entry.service)
