@@ -1,6 +1,7 @@
 package com.blackserv.passwdgen
 
 import android.app.Application
+import android.net.Uri
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.UserNotAuthenticatedException
 import androidx.lifecycle.AndroidViewModel
@@ -11,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.ByteArrayOutputStream
 
 internal enum class AppSection { GENERATOR, VAULT }
 
@@ -98,8 +100,76 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
         }
     }
 
+    fun exportBackup(uri: Uri, passphrase: String) {
+        if (!_state.value.vaultUnlocked || _state.value.vaultBusy) return
+        _state.update { it.copy(vaultBusy = true, message = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val entries = repository.loadAll()
+                val encoded = VaultBackupCodec.encode(entries, passphrase)
+                try {
+                    val resolver = getApplication<Application>().contentResolver
+                    resolver.openOutputStream(uri, "wt")?.use { output ->
+                        output.write(encoded)
+                        output.flush()
+                    } ?: error("Nie udało się otworzyć pliku kopii do zapisu.")
+                } finally {
+                    encoded.fill(0)
+                }
+                entries.size
+            }.onSuccess { count ->
+                _state.update {
+                    it.copy(vaultBusy = false, message = "Utworzono zaszyfrowaną kopię $count wpisów.")
+                }
+            }.onFailure(::handleVaultError)
+        }
+    }
+
+    fun importBackup(uri: Uri, passphrase: String) {
+        if (!_state.value.vaultUnlocked || _state.value.vaultBusy) return
+        _state.update { it.copy(vaultBusy = true, message = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val encoded = readBackup(uri)
+                try {
+                    val importedEntries = VaultBackupCodec.decode(encoded, passphrase)
+                    val changed = repository.importEntries(importedEntries)
+                    Triple(repository.loadAll(), importedEntries.size, changed)
+                } finally {
+                    encoded.fill(0)
+                }
+            }.onSuccess { (entries, total, changed) ->
+                _state.update {
+                    it.copy(
+                        vaultBusy = false,
+                        entries = entries,
+                        message = "Odczytano $total wpisów; dodano lub zaktualizowano $changed.",
+                    )
+                }
+            }.onFailure(::handleVaultError)
+        }
+    }
+
     fun showMessage(message: String) = _state.update { it.copy(message = message) }
     fun clearMessage() = _state.update { it.copy(message = null) }
+
+    private fun readBackup(uri: Uri): ByteArray {
+        val resolver = getApplication<Application>().contentResolver
+        val input = resolver.openInputStream(uri) ?: error("Nie udało się otworzyć pliku kopii.")
+        return input.use { stream ->
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            var total = 0
+            while (true) {
+                val read = stream.read(buffer)
+                if (read < 0) break
+                total += read
+                require(total <= MAX_BACKUP_BYTES) { "Plik kopii jest zbyt duży." }
+                output.write(buffer, 0, read)
+            }
+            output.toByteArray()
+        }
+    }
 
     private fun handleVaultError(error: Throwable) {
         when {
@@ -134,5 +204,9 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
             current = current.cause
         }
         return false
+    }
+
+    private companion object {
+        const val MAX_BACKUP_BYTES = 16 * 1024 * 1024
     }
 }
