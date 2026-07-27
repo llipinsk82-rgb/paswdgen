@@ -58,6 +58,8 @@ internal fun VaultBackupControls(
     viewModel: MainViewModel,
     enabled: Boolean,
     scheduledBackup: ScheduledBackupStatus,
+    onSensitiveActionRequest: (title: String, action: () -> Unit) -> Unit,
+    onExternalFlowChanged: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
 
@@ -81,6 +83,7 @@ internal fun VaultBackupControls(
     val createDocument = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument(VaultBackupCodec.MIME_TYPE),
     ) { uri ->
+        onExternalFlowChanged(false)
         val secret = pendingExportPassphrase
         pendingExportPassphrase = null
         if (uri != null && secret != null) viewModel.exportBackup(uri, secret)
@@ -89,6 +92,7 @@ internal fun VaultBackupControls(
     val openDocument = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
+        onExternalFlowChanged(false)
         if (uri != null) {
             importUri = uri
             passphrase = ""
@@ -100,6 +104,7 @@ internal fun VaultBackupControls(
     val chooseBackupFolder = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
     ) { uri ->
+        onExternalFlowChanged(false)
         val secret = pendingSchedulePassphrase
         val wifiOnly = pendingScheduleWifiOnly
         pendingSchedulePassphrase = null
@@ -161,7 +166,15 @@ internal fun VaultBackupControls(
                 }
                 OutlinedButton(
                     onClick = {
-                        openDocument.launch(arrayOf(VaultBackupCodec.MIME_TYPE, "application/octet-stream"))
+                        onSensitiveActionRequest("Import zaszyfrowanej kopii") {
+                            onExternalFlowChanged(true)
+                            runCatching {
+                                openDocument.launch(arrayOf(VaultBackupCodec.MIME_TYPE, "application/octet-stream"))
+                            }.onFailure {
+                                onExternalFlowChanged(false)
+                                viewModel.showMessage("Nie udało się otworzyć selektora plików.")
+                            }
+                        }
                     },
                     enabled = enabled,
                     modifier = Modifier.weight(1f).height(44.dp),
@@ -295,7 +308,15 @@ internal fun VaultBackupControls(
                         passphrase = ""
                         confirmation = ""
                         showExportDialog = false
-                        createDocument.launch(defaultBackupName())
+                        onSensitiveActionRequest("Eksport zaszyfrowanej kopii") {
+                            onExternalFlowChanged(true)
+                            runCatching { createDocument.launch(defaultBackupName()) }
+                                .onFailure {
+                                    pendingExportPassphrase = null
+                                    onExternalFlowChanged(false)
+                                    viewModel.showMessage("Nie udało się otworzyć selektora plików.")
+                                }
+                        }
                     }
                 }
             },
@@ -358,7 +379,16 @@ internal fun VaultBackupControls(
                         schedulePassphrase = ""
                         scheduleConfirmation = ""
                         showScheduleDialog = false
-                        chooseBackupFolder.launch(null)
+                        onSensitiveActionRequest("Konfiguracja automatycznej kopii") {
+                            onExternalFlowChanged(true)
+                            runCatching { chooseBackupFolder.launch(null) }
+                                .onFailure {
+                                    pendingSchedulePassphrase = null
+                                    pendingScheduleWifiOnly = true
+                                    onExternalFlowChanged(false)
+                                    viewModel.showMessage("Nie udało się otworzyć wyboru folderu.")
+                                }
+                        }
                     }
                 }
             },

@@ -57,7 +57,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
-internal fun PasswdGenApp(viewModel: MainViewModel, onUnlockRequest: () -> Unit) {
+internal fun PasswdGenApp(
+    viewModel: MainViewModel,
+    onUnlockRequest: () -> Unit,
+    onSensitiveActionRequest: (title: String, action: () -> Unit) -> Unit,
+    onExternalFlowChanged: (Boolean) -> Unit,
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
 
@@ -92,6 +97,8 @@ internal fun PasswdGenApp(viewModel: MainViewModel, onUnlockRequest: () -> Unit)
                     viewModel = viewModel,
                     state = state,
                     onUnlockRequest = onUnlockRequest,
+                    onSensitiveActionRequest = onSensitiveActionRequest,
+                    onExternalFlowChanged = onExternalFlowChanged,
                     onSearchChange = viewModel::setSearchQuery,
                     onSave = viewModel::saveEntry,
                     onDelete = viewModel::deleteEntry,
@@ -137,6 +144,8 @@ private fun VaultScreen(
     viewModel: MainViewModel,
     state: AppUiState,
     onUnlockRequest: () -> Unit,
+    onSensitiveActionRequest: (title: String, action: () -> Unit) -> Unit,
+    onExternalFlowChanged: (Boolean) -> Unit,
     onSearchChange: (String) -> Unit,
     onSave: (VaultEntry) -> Unit,
     onDelete: (String) -> Unit,
@@ -191,6 +200,16 @@ private fun VaultScreen(
             viewModel = viewModel,
             enabled = !state.vaultBusy,
             scheduledBackup = state.scheduledBackup,
+            onSensitiveActionRequest = onSensitiveActionRequest,
+            onExternalFlowChanged = onExternalFlowChanged,
+        )
+        Spacer(Modifier.height(8.dp))
+        VaultMigrationControls(
+            viewModel = viewModel,
+            enabled = !state.vaultBusy,
+            preview = state.csvImportPreview,
+            onSensitiveActionRequest = onSensitiveActionRequest,
+            onExternalFlowChanged = onExternalFlowChanged,
         )
         Spacer(Modifier.height(10.dp))
 
