@@ -1,6 +1,7 @@
 package com.blackserv.passwdgen
 
 import android.app.Application
+import android.content.SharedPreferences
 import android.net.Uri
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.UserNotAuthenticatedException
@@ -24,13 +25,20 @@ internal data class AppUiState(
     val vaultBusy: Boolean = false,
     val entries: List<VaultEntry> = emptyList(),
     val searchQuery: String = "",
+    val scheduledBackup: ScheduledBackupStatus = ScheduledBackupStatus(),
     val message: String? = null,
 )
 
 internal class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = VaultRepository(application)
-    private val _state = MutableStateFlow(AppUiState())
+    private val scheduledBackup = ScheduledBackupCoordinator(application)
+    private val _state = MutableStateFlow(
+        AppUiState(scheduledBackup = scheduledBackup.status()),
+    )
     val state: StateFlow<AppUiState> = _state.asStateFlow()
+
+    private val backupStatusListener: SharedPreferences.OnSharedPreferenceChangeListener =
+        scheduledBackup.registerStatusListener(::refreshScheduledBackupStatus)
 
     fun selectSection(section: AppSection) = _state.update { it.copy(section = section) }
 
@@ -57,10 +65,15 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 repository.unlockProbe()
-                repository.loadAll()
+                repository.loadAll().also(::refreshScheduledSnapshotSafely)
             }.onSuccess { entries ->
                 _state.update {
-                    it.copy(vaultUnlocked = true, vaultBusy = false, entries = entries)
+                    it.copy(
+                        vaultUnlocked = true,
+                        vaultBusy = false,
+                        entries = entries,
+                        scheduledBackup = scheduledBackup.status(),
+                    )
                 }
             }.onFailure(::handleVaultError)
         }
@@ -80,9 +93,16 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 repository.save(entry)
-                repository.loadAll()
+                repository.loadAll().also(::refreshScheduledSnapshotSafely)
             }.onSuccess { entries ->
-                _state.update { it.copy(vaultBusy = false, entries = entries, message = "Wpis zapisany.") }
+                _state.update {
+                    it.copy(
+                        vaultBusy = false,
+                        entries = entries,
+                        scheduledBackup = scheduledBackup.status(),
+                        message = "Wpis zapisany.",
+                    )
+                }
             }.onFailure(::handleVaultError)
         }
     }
@@ -93,9 +113,16 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 repository.delete(id)
-                repository.loadAll()
+                repository.loadAll().also(::refreshScheduledSnapshotSafely)
             }.onSuccess { entries ->
-                _state.update { it.copy(vaultBusy = false, entries = entries, message = "Wpis usunięty.") }
+                _state.update {
+                    it.copy(
+                        vaultBusy = false,
+                        entries = entries,
+                        scheduledBackup = scheduledBackup.status(),
+                        message = "Wpis usunięty.",
+                    )
+                }
             }.onFailure(::handleVaultError)
         }
     }
@@ -134,7 +161,9 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
                 try {
                     val importedEntries = VaultBackupCodec.decode(encoded, passphrase)
                     val changed = repository.importEntries(importedEntries)
-                    Triple(repository.loadAll(), importedEntries.size, changed)
+                    val entries = repository.loadAll()
+                    refreshScheduledSnapshotSafely(entries)
+                    Triple(entries, importedEntries.size, changed)
                 } finally {
                     encoded.fill(0)
                 }
@@ -143,6 +172,7 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
                     it.copy(
                         vaultBusy = false,
                         entries = entries,
+                        scheduledBackup = scheduledBackup.status(),
                         message = "Odczytano $total wpisów; dodano lub zaktualizowano $changed.",
                     )
                 }
@@ -150,8 +180,91 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
         }
     }
 
+    fun configureScheduledBackup(
+        treeUri: Uri,
+        targetLabel: String,
+        passphrase: String,
+        wifiOnly: Boolean,
+    ) {
+        if (!_state.value.vaultUnlocked || _state.value.vaultBusy) return
+        _state.update { it.copy(vaultBusy = true, message = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val entries = repository.loadAll()
+                scheduledBackup.configure(
+                    treeUri = treeUri,
+                    targetLabel = targetLabel,
+                    wifiOnly = wifiOnly,
+                    passphrase = passphrase,
+                    entries = entries,
+                )
+                entries
+            }.onSuccess { entries ->
+                _state.update {
+                    it.copy(
+                        vaultBusy = false,
+                        entries = entries,
+                        scheduledBackup = scheduledBackup.status(),
+                        message = "Automatyczna kopia została skonfigurowana. Pierwszy zapis został zlecony.",
+                    )
+                }
+            }.onFailure(::handleVaultError)
+        }
+    }
+
+    fun runScheduledBackupNow() {
+        if (!_state.value.vaultUnlocked || _state.value.vaultBusy) return
+        _state.update { it.copy(vaultBusy = true, message = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val entries = repository.loadAll()
+                scheduledBackup.enqueueNow(entries)
+            }.onSuccess {
+                _state.update {
+                    it.copy(
+                        vaultBusy = false,
+                        scheduledBackup = scheduledBackup.status(),
+                        message = "Zlecono zaszyfrowaną kopię do wybranego folderu.",
+                    )
+                }
+            }.onFailure(::handleVaultError)
+        }
+    }
+
+    fun disableScheduledBackup() {
+        if (_state.value.vaultBusy) return
+        _state.update { it.copy(vaultBusy = true, message = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { scheduledBackup.disable() }
+                .onSuccess {
+                    _state.update {
+                        it.copy(
+                            vaultBusy = false,
+                            scheduledBackup = scheduledBackup.status(),
+                            message = "Automatyczna kopia została wyłączona.",
+                        )
+                    }
+                }
+                .onFailure(::handleVaultError)
+        }
+    }
+
     fun showMessage(message: String) = _state.update { it.copy(message = message) }
     fun clearMessage() = _state.update { it.copy(message = null) }
+
+    override fun onCleared() {
+        scheduledBackup.unregisterStatusListener(backupStatusListener)
+        super.onCleared()
+    }
+
+    private fun refreshScheduledSnapshotSafely(entries: List<VaultEntry>) {
+        if (!scheduledBackup.status().configured) return
+        runCatching { scheduledBackup.refreshSnapshotIfConfigured(entries) }
+    }
+
+    private fun refreshScheduledBackupStatus() {
+        _state.update { it.copy(scheduledBackup = scheduledBackup.status()) }
+    }
 
     private fun readBackup(uri: Uri): ByteArray {
         val resolver = getApplication<Application>().contentResolver
@@ -178,6 +291,7 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
                     vaultUnlocked = false,
                     vaultBusy = false,
                     entries = emptyList(),
+                    scheduledBackup = scheduledBackup.status(),
                     message = "Sejf jest zablokowany. Uwierzytelnij się ponownie.",
                 )
             }
@@ -187,12 +301,17 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
                     vaultUnlocked = false,
                     vaultBusy = false,
                     entries = emptyList(),
+                    scheduledBackup = scheduledBackup.status(),
                     message = "Klucz sejfu został unieważniony przez zmianę zabezpieczeń urządzenia. Nie zapisuj nowych danych i skontaktuj się z pomocą.",
                 )
             }
 
             else -> _state.update {
-                it.copy(vaultBusy = false, message = error.message ?: "Błąd sejfu.")
+                it.copy(
+                    vaultBusy = false,
+                    scheduledBackup = scheduledBackup.status(),
+                    message = error.message ?: "Błąd sejfu.",
+                )
             }
         }
     }
