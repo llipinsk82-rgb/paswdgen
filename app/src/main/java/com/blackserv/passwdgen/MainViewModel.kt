@@ -26,6 +26,7 @@ internal data class AppUiState(
     val entries: List<VaultEntry> = emptyList(),
     val searchQuery: String = "",
     val scheduledBackup: ScheduledBackupStatus = ScheduledBackupStatus(),
+    val csvImportPreview: CsvImportPreview? = null,
     val message: String? = null,
 )
 
@@ -36,6 +37,8 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
         AppUiState(scheduledBackup = scheduledBackup.status()),
     )
     val state: StateFlow<AppUiState> = _state.asStateFlow()
+
+    private var pendingCsvCredentials: List<CsvCredential> = emptyList()
 
     private val backupStatusListener: SharedPreferences.OnSharedPreferenceChangeListener =
         scheduledBackup.registerStatusListener(::refreshScheduledBackupStatus)
@@ -80,8 +83,15 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
     }
 
     fun lockVault() {
+        clearPendingCsvImport()
         _state.update {
-            it.copy(vaultUnlocked = false, vaultBusy = false, entries = emptyList(), searchQuery = "")
+            it.copy(
+                vaultUnlocked = false,
+                vaultBusy = false,
+                entries = emptyList(),
+                searchQuery = "",
+                csvImportPreview = null,
+            )
         }
     }
 
@@ -135,11 +145,7 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
                 val entries = repository.loadAll()
                 val encoded = VaultBackupCodec.encode(entries, passphrase)
                 try {
-                    val resolver = getApplication<Application>().contentResolver
-                    resolver.openOutputStream(uri, "wt")?.use { output ->
-                        output.write(encoded)
-                        output.flush()
-                    } ?: error("Nie udało się otworzyć pliku kopii do zapisu.")
+                    writeDocument(uri, encoded)
                 } finally {
                     encoded.fill(0)
                 }
@@ -157,7 +163,7 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
         _state.update { it.copy(vaultBusy = true, message = null) }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                val encoded = readBackup(uri)
+                val encoded = readDocument(uri, MAX_BACKUP_BYTES, "Plik kopii jest zbyt duży.")
                 try {
                     val importedEntries = VaultBackupCodec.decode(encoded, passphrase)
                     val changed = repository.importEntries(importedEntries)
@@ -249,12 +255,130 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
         }
     }
 
+    fun previewCsvImport(uri: Uri) {
+        if (!_state.value.vaultUnlocked || _state.value.vaultBusy) return
+        clearPendingCsvImport()
+        _state.update { it.copy(vaultBusy = true, csvImportPreview = null, message = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val data = readDocument(uri, PasswordCsvCodec.MAX_FILE_BYTES, "Plik CSV jest zbyt duży.")
+                try {
+                    val decoded = PasswordCsvCodec.decode(data)
+                    val existingKeys = repository.loadAll()
+                        .mapTo(HashSet()) { PasswordCsvCodec.duplicateKey(it.website, it.username) }
+                    val ready = decoded.credentials.filter {
+                        PasswordCsvCodec.duplicateKey(it.url, it.username) !in existingKeys
+                    }
+                    val existingDuplicates = decoded.credentials.size - ready.size
+                    pendingCsvCredentials = ready
+                    CsvImportPreview(
+                        totalRows = decoded.totalRows,
+                        readyRows = ready.size,
+                        rejectedRows = decoded.rejectedRows,
+                        duplicateRows = decoded.duplicateRows + existingDuplicates,
+                        formulaLikeFields = decoded.formulaLikeFields,
+                    )
+                } finally {
+                    data.fill(0)
+                }
+            }.onSuccess { preview ->
+                _state.update { it.copy(vaultBusy = false, csvImportPreview = preview) }
+            }.onFailure {
+                clearPendingCsvImport()
+                handleVaultError(it)
+            }
+        }
+    }
+
+    fun confirmCsvImport() {
+        if (!_state.value.vaultUnlocked || _state.value.vaultBusy) return
+        val pending = pendingCsvCredentials
+        if (pending.isEmpty()) {
+            cancelCsvImport()
+            return
+        }
+        pendingCsvCredentials = emptyList()
+        _state.update { it.copy(vaultBusy = true, csvImportPreview = null, message = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val now = System.currentTimeMillis()
+                val entriesToImport = pending.map { credential ->
+                    VaultEntry(
+                        service = credential.name,
+                        website = credential.url,
+                        username = credential.username,
+                        password = credential.password,
+                        notes = credential.note,
+                        createdAt = now,
+                        updatedAt = now,
+                    )
+                }
+                val changed = repository.importEntries(entriesToImport)
+                val entries = repository.loadAll()
+                refreshScheduledSnapshotSafely(entries)
+                entries to changed
+            }.onSuccess { (entries, changed) ->
+                _state.update {
+                    it.copy(
+                        vaultBusy = false,
+                        entries = entries,
+                        scheduledBackup = scheduledBackup.status(),
+                        message = "Zaimportowano $changed rekordów CSV. Usuń jawny plik CSV z urządzenia i chmury.",
+                    )
+                }
+            }.onFailure(::handleVaultError)
+        }
+    }
+
+    fun cancelCsvImport() {
+        clearPendingCsvImport()
+        _state.update { it.copy(csvImportPreview = null) }
+    }
+
+    fun exportGoogleCsv(uri: Uri) {
+        if (!_state.value.vaultUnlocked || _state.value.vaultBusy) return
+        _state.update { it.copy(vaultBusy = true, message = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val result = PasswordCsvCodec.encode(repository.loadAll())
+                try {
+                    writeDocument(uri, result.bytes)
+                } finally {
+                    result.bytes.fill(0)
+                }
+                result
+            }.onSuccess { result ->
+                val skipped = if (result.skippedCount > 0) {
+                    " Pominięto ${result.skippedCount} wpisów bez witryny lub ponad limit."
+                } else {
+                    ""
+                }
+                val formulaWarning = if (result.formulaLikeFields > 0) {
+                    " Wykryto ${result.formulaLikeFields} pól podobnych do formuł — nie otwieraj CSV w arkuszu."
+                } else {
+                    ""
+                }
+                _state.update {
+                    it.copy(
+                        vaultBusy = false,
+                        message = "Wyeksportowano ${result.exportedCount} rekordów CSV.$skipped$formulaWarning Usuń CSV po imporcie do Google.",
+                    )
+                }
+            }.onFailure(::handleVaultError)
+        }
+    }
+
     fun showMessage(message: String) = _state.update { it.copy(message = message) }
     fun clearMessage() = _state.update { it.copy(message = null) }
 
     override fun onCleared() {
+        clearPendingCsvImport()
         scheduledBackup.unregisterStatusListener(backupStatusListener)
         super.onCleared()
+    }
+
+    private fun clearPendingCsvImport() {
+        pendingCsvCredentials = emptyList()
     }
 
     private fun refreshScheduledSnapshotSafely(entries: List<VaultEntry>) {
@@ -266,9 +390,17 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
         _state.update { it.copy(scheduledBackup = scheduledBackup.status()) }
     }
 
-    private fun readBackup(uri: Uri): ByteArray {
+    private fun writeDocument(uri: Uri, data: ByteArray) {
         val resolver = getApplication<Application>().contentResolver
-        val input = resolver.openInputStream(uri) ?: error("Nie udało się otworzyć pliku kopii.")
+        resolver.openOutputStream(uri, "wt")?.use { output ->
+            output.write(data)
+            output.flush()
+        } ?: error("Nie udało się otworzyć dokumentu do zapisu.")
+    }
+
+    private fun readDocument(uri: Uri, limit: Int, sizeError: String): ByteArray {
+        val resolver = getApplication<Application>().contentResolver
+        val input = resolver.openInputStream(uri) ?: error("Nie udało się otworzyć wybranego dokumentu.")
         return input.use { stream ->
             val output = ByteArrayOutputStream()
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
@@ -277,7 +409,7 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
                 val read = stream.read(buffer)
                 if (read < 0) break
                 total += read
-                require(total <= MAX_BACKUP_BYTES) { "Plik kopii jest zbyt duży." }
+                require(total <= limit) { sizeError }
                 output.write(buffer, 0, read)
             }
             output.toByteArray()
@@ -287,20 +419,24 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
     private fun handleVaultError(error: Throwable) {
         when {
             error.hasCause<UserNotAuthenticatedException>() -> _state.update {
+                clearPendingCsvImport()
                 it.copy(
                     vaultUnlocked = false,
                     vaultBusy = false,
                     entries = emptyList(),
+                    csvImportPreview = null,
                     scheduledBackup = scheduledBackup.status(),
                     message = "Sejf jest zablokowany. Uwierzytelnij się ponownie.",
                 )
             }
 
             error.hasCause<KeyPermanentlyInvalidatedException>() -> _state.update {
+                clearPendingCsvImport()
                 it.copy(
                     vaultUnlocked = false,
                     vaultBusy = false,
                     entries = emptyList(),
+                    csvImportPreview = null,
                     scheduledBackup = scheduledBackup.status(),
                     message = "Klucz sejfu został unieważniony przez zmianę zabezpieczeń urządzenia. Nie zapisuj nowych danych i skontaktuj się z pomocą.",
                 )
