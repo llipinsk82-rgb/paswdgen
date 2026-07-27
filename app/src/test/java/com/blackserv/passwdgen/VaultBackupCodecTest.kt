@@ -1,10 +1,10 @@
 package com.blackserv.passwdgen
 
-import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.util.Base64
+import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
 
 class VaultBackupCodecTest {
     private val entries = listOf(
@@ -38,11 +38,12 @@ class VaultBackupCodecTest {
         )
 
         val decoded = VaultBackupCodec.decode(encoded, "very strong backup passphrase")
+        val printable = String(encoded, StandardCharsets.ISO_8859_1)
 
         assertEquals(entries, decoded)
-        assertTrue(encoded.decodeToString().contains("PASSWDGEN-BACKUP"))
-        assertTrue(!encoded.decodeToString().contains("correct-horse-battery-staple"))
-        assertTrue(!encoded.decodeToString().contains("user@example.com"))
+        assertTrue(printable.startsWith("PASSWDGEN-BACKUP"))
+        assertTrue(!printable.contains("correct-horse-battery-staple"))
+        assertTrue(!printable.contains("user@example.com"))
     }
 
     @Test(expected = IllegalArgumentException::class)
@@ -54,20 +55,19 @@ class VaultBackupCodecTest {
     @Test(expected = IllegalArgumentException::class)
     fun modifiedCiphertextIsRejected() {
         val encoded = VaultBackupCodec.encode(entries, "very strong backup passphrase", 100_000)
-        val envelope = JSONObject(encoded.decodeToString())
-        val cipherText = Base64.getDecoder().decode(envelope.getString("payload"))
-        cipherText[cipherText.lastIndex] = (cipherText.last().toInt() xor 1).toByte()
-        envelope.put("payload", Base64.getEncoder().encodeToString(cipherText))
+        val modified = encoded.copyOf()
+        modified[modified.lastIndex] = (modified.last().toInt() xor 1).toByte()
 
-        VaultBackupCodec.decode(envelope.toString().encodeToByteArray(), "very strong backup passphrase")
+        VaultBackupCodec.decode(modified, "very strong backup passphrase")
     }
 
     @Test(expected = IllegalArgumentException::class)
     fun unknownFormatVersionIsRejectedBeforeDecryption() {
         val encoded = VaultBackupCodec.encode(entries, "very strong backup passphrase", 100_000)
-        val envelope = JSONObject(encoded.decodeToString()).put("version", 99)
+        val modified = encoded.copyOf()
+        ByteBuffer.wrap(modified, VaultBackupCodec.MAGIC_SIZE, Int.SIZE_BYTES).putInt(99)
 
-        VaultBackupCodec.decode(envelope.toString().encodeToByteArray(), "very strong backup passphrase")
+        VaultBackupCodec.decode(modified, "very strong backup passphrase")
     }
 
     @Test(expected = IllegalArgumentException::class)
