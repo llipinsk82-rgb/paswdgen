@@ -639,7 +639,7 @@ internal fun PremiumVaultRow(
                 modifier = Modifier.fillMaxWidth().clickable(onClick = onToggleExpanded),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                ServiceMark(entry.service)
+                ServiceBrandMark(service = entry.service, website = entry.website)
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -701,25 +701,6 @@ internal fun PremiumVaultRow(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun ServiceMark(service: String) {
-    Box(
-        modifier = Modifier
-            .size(44.dp)
-            .shadow(10.dp, RoundedCornerShape(14.dp))
-            .clip(RoundedCornerShape(14.dp))
-            .background(Brush.linearGradient(listOf(PgCyanBright, Color(0xFF1B87DF)))),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            service.trim().firstOrNull()?.uppercase() ?: "•",
-            color = Color(0xFF001517),
-            fontSize = 19.sp,
-            fontWeight = FontWeight.Black,
-        )
     }
 }
 
