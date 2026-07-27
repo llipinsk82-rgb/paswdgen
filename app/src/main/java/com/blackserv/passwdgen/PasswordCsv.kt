@@ -79,8 +79,8 @@ internal object PasswordCsvCodec {
                 val url = row.valueAt(urlIndex).trim()
                 val username = row.valueAt(usernameIndex).trim()
                 val password = row.valueAt(passwordIndex)
-                val name = nameIndex?.let(row::valueAt).orEmpty().trim()
-                val note = noteIndex?.let(row::valueAt).orEmpty()
+                val name = nameIndex?.let { index -> row.valueAt(index) }.orEmpty().trim()
+                val note = noteIndex?.let { index -> row.valueAt(index) }.orEmpty()
 
                 require(url.isNotBlank() && username.isNotBlank() && password.isNotBlank()) {
                     "Brak wymaganego pola CSV."
