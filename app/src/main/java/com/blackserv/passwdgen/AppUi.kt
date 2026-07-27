@@ -190,6 +190,7 @@ private fun VaultScreen(
         VaultBackupControls(
             viewModel = viewModel,
             enabled = !state.vaultBusy,
+            scheduledBackup = state.scheduledBackup,
         )
         Spacer(Modifier.height(10.dp))
 

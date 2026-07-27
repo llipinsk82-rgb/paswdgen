@@ -1,6 +1,7 @@
 package com.blackserv.passwdgen
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.ByteBuffer
@@ -74,4 +75,20 @@ class VaultBackupCodecTest {
     fun shortBackupPassphraseIsRejected() {
         VaultBackupCodec.encode(entries, "too-short", 100_000)
     }
+    @Test
+    fun preparedKeyProducesPortableSnapshotsWithFreshIvs() {
+        val passphrase = "very strong backup passphrase"
+        val material = VaultBackupCodec.prepareKey(passphrase, 100_000)
+        try {
+            val first = VaultBackupCodec.encodeWithKey(entries, material)
+            val second = VaultBackupCodec.encodeWithKey(entries, material)
+
+            assertFalse(first.contentEquals(second))
+            assertEquals(entries, VaultBackupCodec.decode(first, passphrase))
+            assertEquals(entries, VaultBackupCodec.decode(second, passphrase))
+        } finally {
+            material.close()
+        }
+    }
+
 }

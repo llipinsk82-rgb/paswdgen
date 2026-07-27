@@ -15,6 +15,17 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 
+
+internal class VaultBackupKeyMaterial(
+    val salt: ByteArray,
+    val iterations: Int,
+    val keyBytes: ByteArray,
+) : AutoCloseable {
+    override fun close() {
+        keyBytes.fill(0)
+    }
+}
+
 internal object VaultBackupCodec {
     private val MAGIC = "PASSWDGEN-BACKUP".encodeToByteArray()
     internal const val MAGIC_SIZE = 16
@@ -48,28 +59,55 @@ internal object VaultBackupCodec {
         check(MAGIC.size == MAGIC_SIZE)
     }
 
+    fun prepareKey(
+        passphrase: String,
+        iterations: Int = DEFAULT_ITERATIONS,
+    ): VaultBackupKeyMaterial {
+        validatePassphrase(passphrase)
+        require(iterations in MIN_ACCEPTED_ITERATIONS..MAX_ACCEPTED_ITERATIONS) {
+            "Nieprawidłowy parametr zabezpieczenia kopii."
+        }
+        val salt = ByteArray(SALT_BYTES).also(random::nextBytes)
+        return VaultBackupKeyMaterial(
+            salt = salt,
+            iterations = iterations,
+            keyBytes = deriveKey(passphrase, salt, iterations),
+        )
+    }
+
     fun encode(
         entries: List<VaultEntry>,
         passphrase: String,
         iterations: Int = DEFAULT_ITERATIONS,
     ): ByteArray {
-        validatePassphrase(passphrase)
+        val material = prepareKey(passphrase, iterations)
+        return try {
+            encodeWithKey(entries, material)
+        } finally {
+            material.close()
+        }
+    }
+
+    fun encodeWithKey(
+        entries: List<VaultEntry>,
+        material: VaultBackupKeyMaterial,
+    ): ByteArray {
         require(entries.size <= MAX_ENTRIES) { "Kopia zawiera zbyt wiele wpisów." }
-        require(iterations in MIN_ACCEPTED_ITERATIONS..MAX_ACCEPTED_ITERATIONS) {
+        require(material.iterations in MIN_ACCEPTED_ITERATIONS..MAX_ACCEPTED_ITERATIONS) {
             "Nieprawidłowy parametr zabezpieczenia kopii."
         }
+        require(material.salt.size == SALT_BYTES) { "Nieprawidłowa sól klucza kopii." }
+        require(material.keyBytes.size == KEY_BITS / 8) { "Nieprawidłowy klucz kopii." }
 
-        val salt = ByteArray(SALT_BYTES).also(random::nextBytes)
         val iv = ByteArray(IV_BYTES).also(random::nextBytes)
-        val aad = associatedData(FORMAT_VERSION, iterations)
+        val aad = associatedData(FORMAT_VERSION, material.iterations)
         val plainText = encodePayload(entries)
-        val keyBytes = deriveKey(passphrase, salt, iterations)
 
         return try {
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(
                 Cipher.ENCRYPT_MODE,
-                SecretKeySpec(keyBytes, "AES"),
+                SecretKeySpec(material.keyBytes, "AES"),
                 GCMParameterSpec(GCM_TAG_BITS, iv),
             )
             cipher.updateAAD(aad)
@@ -80,9 +118,9 @@ internal object VaultBackupCodec {
                     output.write(MAGIC)
                     output.writeInt(FORMAT_VERSION)
                     output.writeInt(KDF_ID_PBKDF2_SHA256)
-                    output.writeInt(iterations)
-                    output.writeInt(salt.size)
-                    output.write(salt)
+                    output.writeInt(material.iterations)
+                    output.writeInt(material.salt.size)
+                    output.write(material.salt)
                     output.writeInt(CIPHER_ID_AES_256_GCM)
                     output.writeInt(iv.size)
                     output.write(iv)
@@ -95,7 +133,6 @@ internal object VaultBackupCodec {
             }
         } finally {
             plainText.fill(0)
-            keyBytes.fill(0)
         }
     }
 
