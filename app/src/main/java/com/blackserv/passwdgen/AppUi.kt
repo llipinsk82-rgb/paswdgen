@@ -89,6 +89,7 @@ internal fun PasswdGenApp(viewModel: MainViewModel, onUnlockRequest: () -> Unit)
                     modifier = Modifier.padding(padding),
                 )
                 AppSection.VAULT -> VaultScreen(
+                    viewModel = viewModel,
                     state = state,
                     onUnlockRequest = onUnlockRequest,
                     onSearchChange = viewModel::setSearchQuery,
@@ -133,6 +134,7 @@ private fun GeneratorScreen(
 
 @Composable
 private fun VaultScreen(
+    viewModel: MainViewModel,
     state: AppUiState,
     onUnlockRequest: () -> Unit,
     onSearchChange: (String) -> Unit,
@@ -183,6 +185,11 @@ private fun VaultScreen(
             totalCount = state.entries.size,
             onSearchChange = onSearchChange,
             onAdd = { creating = true },
+        )
+        Spacer(Modifier.height(8.dp))
+        VaultBackupControls(
+            viewModel = viewModel,
+            enabled = !state.vaultBusy,
         )
         Spacer(Modifier.height(10.dp))
 
