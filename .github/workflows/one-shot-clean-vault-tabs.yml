@@ -1,0 +1,38 @@
+name: One-shot clean vault tabs
+
+on:
+  push:
+    branches:
+      - agent/android-vault-mvp
+    paths:
+      - ops/run-clean-vault-tabs
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: agent/android-vault-mvp
+          fetch-depth: 0
+
+      - name: Remove one-shot files
+        run: |
+          set -euo pipefail
+          git rm -f \
+            scripts/patch-vault-tabs-compile.py \
+            .github/workflows/one-shot-clean-vault-tabs.yml \
+            ops/run-clean-vault-tabs
+          git diff --check
+
+      - name: Commit clean branch
+        run: |
+          set -euo pipefail
+          git config user.name "blackserv-cleanup-bot"
+          git config user.email "blackserv-cleanup-bot@users.noreply.github.com"
+          git commit -m "chore: clean vault tab diagnostics"
+          git push origin HEAD:agent/android-vault-mvp
