@@ -167,6 +167,7 @@ private fun VaultScreen(
     var editing by remember { mutableStateOf<VaultEntry?>(null) }
     var creating by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<VaultEntry?>(null) }
+    var toolsExpanded by remember { mutableStateOf(false) }
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
     val revealed = remember { mutableStateMapOf<String, Boolean>() }
     val filtered = remember(state.entries, state.searchQuery) {
@@ -183,6 +184,10 @@ private fun VaultScreen(
         }
     }
 
+    LaunchedEffect(state.entries) {
+        toolsExpanded = false
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -195,36 +200,59 @@ private fun VaultScreen(
             onSearchChange = onSearchChange,
             onAdd = { creating = true },
         )
-        Spacer(Modifier.height(8.dp))
-        VaultBackupControls(
-            viewModel = viewModel,
-            enabled = !state.vaultBusy,
-            scheduledBackup = state.scheduledBackup,
-            onSensitiveActionRequest = onSensitiveActionRequest,
-            onExternalFlowChanged = onExternalFlowChanged,
-        )
-        Spacer(Modifier.height(8.dp))
-        VaultMigrationControls(
-            viewModel = viewModel,
-            enabled = !state.vaultBusy,
-            preview = state.csvImportPreview,
-            onSensitiveActionRequest = onSensitiveActionRequest,
-            onExternalFlowChanged = onExternalFlowChanged,
-        )
-        Spacer(Modifier.height(10.dp))
-
-        if (filtered.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Narzędzia sejfu", color = PgTextMuted)
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = { toolsExpanded = !toolsExpanded }) {
                 Text(
-                    if (state.entries.isEmpty()) "Sejf jest pusty." else "Brak pasujących wpisów.",
-                    color = PgTextMuted,
+                    if (toolsExpanded) "Zwiń" else "Kopia i migracja",
+                    color = PgCyan,
                 )
             }
-        } else {
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxSize(),
-            ) {
+        }
+
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        ) {
+            if (toolsExpanded) {
+                item {
+                    VaultBackupControls(
+                        viewModel = viewModel,
+                        enabled = !state.vaultBusy,
+                        scheduledBackup = state.scheduledBackup,
+                        onSensitiveActionRequest = onSensitiveActionRequest,
+                        onExternalFlowChanged = onExternalFlowChanged,
+                    )
+                }
+                item {
+                    VaultMigrationControls(
+                        viewModel = viewModel,
+                        enabled = !state.vaultBusy,
+                        preview = state.csvImportPreview,
+                        onSensitiveActionRequest = onSensitiveActionRequest,
+                        onExternalFlowChanged = onExternalFlowChanged,
+                    )
+                }
+                item { Spacer(Modifier.height(2.dp)) }
+            }
+
+            if (filtered.isEmpty()) {
+                item {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().height(220.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            if (state.entries.isEmpty()) "Sejf jest pusty." else "Brak pasujących wpisów.",
+                            color = PgTextMuted,
+                        )
+                    }
+                }
+            } else {
                 items(filtered, key = VaultEntry::id) { entry ->
                     PremiumVaultRow(
                         entry = entry,
@@ -244,8 +272,8 @@ private fun VaultScreen(
                         onDelete = { deleting = entry },
                     )
                 }
-                item { Spacer(Modifier.height(14.dp)) }
             }
+            item { Spacer(Modifier.height(14.dp)) }
         }
     }
 
