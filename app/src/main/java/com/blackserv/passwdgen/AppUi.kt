@@ -167,7 +167,7 @@ private fun VaultScreen(
     var editing by remember { mutableStateOf<VaultEntry?>(null) }
     var creating by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<VaultEntry?>(null) }
-    var toolsExpanded by remember { mutableStateOf(false) }
+    var vaultTab by remember { mutableStateOf(VaultTab.ENTRIES) }
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
     val revealed = remember { mutableStateMapOf<String, Boolean>() }
     val filtered = remember(state.entries, state.searchQuery) {
@@ -185,7 +185,7 @@ private fun VaultScreen(
     }
 
     LaunchedEffect(state.entries) {
-        toolsExpanded = false
+        if (state.entries.isNotEmpty()) vaultTab = VaultTab.ENTRIES
     }
 
     Column(
@@ -193,57 +193,26 @@ private fun VaultScreen(
             .fillMaxSize()
             .padding(horizontal = 14.dp),
     ) {
-        PremiumVaultToolbar(
-            query = state.searchQuery,
-            visibleCount = filtered.size,
-            totalCount = state.entries.size,
-            onSearchChange = onSearchChange,
-            onAdd = { creating = true },
+        VaultTabBar(
+            selected = vaultTab,
+            onSelect = { vaultTab = it },
         )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Narzędzia sejfu", color = PgTextMuted)
-            Spacer(Modifier.weight(1f))
-            TextButton(onClick = { toolsExpanded = !toolsExpanded }) {
-                Text(
-                    if (toolsExpanded) "Zwiń" else "Kopia i migracja",
-                    color = PgCyan,
+        Spacer(Modifier.height(8.dp))
+
+        when (vaultTab) {
+            VaultTab.ENTRIES -> {
+                PremiumVaultToolbar(
+                    query = state.searchQuery,
+                    visibleCount = filtered.size,
+                    totalCount = state.entries.size,
+                    onSearchChange = onSearchChange,
+                    onAdd = { creating = true },
                 )
-            }
-        }
+                Spacer(Modifier.height(8.dp))
 
-        LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-        ) {
-            if (toolsExpanded) {
-                item {
-                    VaultBackupControls(
-                        viewModel = viewModel,
-                        enabled = !state.vaultBusy,
-                        scheduledBackup = state.scheduledBackup,
-                        onSensitiveActionRequest = onSensitiveActionRequest,
-                        onExternalFlowChanged = onExternalFlowChanged,
-                    )
-                }
-                item {
-                    VaultMigrationControls(
-                        viewModel = viewModel,
-                        enabled = !state.vaultBusy,
-                        preview = state.csvImportPreview,
-                        onSensitiveActionRequest = onSensitiveActionRequest,
-                        onExternalFlowChanged = onExternalFlowChanged,
-                    )
-                }
-                item { Spacer(Modifier.height(2.dp)) }
-            }
-
-            if (filtered.isEmpty()) {
-                item {
+                if (filtered.isEmpty()) {
                     Box(
-                        modifier = Modifier.fillMaxWidth().height(220.dp),
+                        modifier = Modifier.fillMaxWidth().weight(1f),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
@@ -251,29 +220,70 @@ private fun VaultScreen(
                             color = PgTextMuted,
                         )
                     }
-                }
-            } else {
-                items(filtered, key = VaultEntry::id) { entry ->
-                    PremiumVaultRow(
-                        entry = entry,
-                        expanded = expanded[entry.id] == true,
-                        revealed = revealed[entry.id] == true,
-                        onToggleExpanded = { expanded[entry.id] = expanded[entry.id] != true },
-                        onRevealChange = { isRevealed -> revealed[entry.id] = isRevealed },
-                        onCopyLogin = {
-                            copySensitive(context, entry.username)
-                            onMessage("Login skopiowany. Schowek wyczyści się po 60 sekundach.")
-                        },
-                        onCopyPassword = {
-                            copySensitive(context, entry.password)
-                            onMessage("Hasło skopiowane. Schowek wyczyści się po 60 sekundach.")
-                        },
-                        onEdit = { editing = entry },
-                        onDelete = { deleting = entry },
-                    )
+                } else {
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                    ) {
+                        items(filtered, key = VaultEntry::id) { entry ->
+                            PremiumVaultRow(
+                                entry = entry,
+                                expanded = expanded[entry.id] == true,
+                                revealed = revealed[entry.id] == true,
+                                onToggleExpanded = { expanded[entry.id] = expanded[entry.id] != true },
+                                onRevealChange = { isRevealed -> revealed[entry.id] = isRevealed },
+                                onCopyLogin = {
+                                    copySensitive(context, entry.username)
+                                    onMessage("Login skopiowany. Schowek wyczyści się po 60 sekundach.")
+                                },
+                                onCopyPassword = {
+                                    copySensitive(context, entry.password)
+                                    onMessage("Hasło skopiowane. Schowek wyczyści się po 60 sekundach.")
+                                },
+                                onEdit = { editing = entry },
+                                onDelete = { deleting = entry },
+                            )
+                        }
+                        item { Spacer(Modifier.height(14.dp)) }
+                    }
                 }
             }
-            item { Spacer(Modifier.height(14.dp)) }
+
+            VaultTab.BACKUP -> {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                ) {
+                    item {
+                        VaultBackupControls(
+                            viewModel = viewModel,
+                            enabled = !state.vaultBusy,
+                            scheduledBackup = state.scheduledBackup,
+                            onSensitiveActionRequest = onSensitiveActionRequest,
+                            onExternalFlowChanged = onExternalFlowChanged,
+                        )
+                    }
+                    item { Spacer(Modifier.height(14.dp)) }
+                }
+            }
+
+            VaultTab.MIGRATION -> {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                ) {
+                    item {
+                        VaultMigrationControls(
+                            viewModel = viewModel,
+                            enabled = !state.vaultBusy,
+                            preview = state.csvImportPreview,
+                            onSensitiveActionRequest = onSensitiveActionRequest,
+                            onExternalFlowChanged = onExternalFlowChanged,
+                        )
+                    }
+                    item { Spacer(Modifier.height(14.dp)) }
+                }
+            }
         }
     }
 
@@ -325,6 +335,37 @@ private fun VaultScreen(
                 }
             },
         )
+    }
+}
+
+private enum class VaultTab { ENTRIES, BACKUP, MIGRATION }
+
+@Composable
+private fun VaultTabBar(
+    selected: VaultTab,
+    onSelect: (VaultTab) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        listOf(
+            VaultTab.ENTRIES to "Wpisy",
+            VaultTab.BACKUP to "Kopia",
+            VaultTab.MIGRATION to "Migracja",
+        ).forEach { (tab, label) ->
+            Button(
+                onClick = { onSelect(tab) },
+                modifier = Modifier.weight(1f).height(40.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (selected == tab) PgCyan else PgSurface.copy(alpha = 0.75f),
+                    contentColor = if (selected == tab) Color(0xFF001517) else PgTextMuted,
+                ),
+            ) {
+                Text(label)
+            }
+        }
     }
 }
 
