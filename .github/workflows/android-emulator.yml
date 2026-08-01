@@ -105,29 +105,45 @@ jobs:
           API_LEVEL: ${{ matrix.api-level }}
         run: |
           set -euo pipefail
-          if [[ -e /dev/kvm ]]; then
-            sudo chmod 666 /dev/kvm
-          fi
-
           emulator_log="${RUNNER_TEMP}/emulator-api-${API_LEVEL}.log"
+          acceleration_log="${RUNNER_TEMP}/emulator-acceleration-api-${API_LEVEL}.log"
+
+          if [[ ! -e /dev/kvm ]]; then
+            echo "ERROR: /dev/kvm is unavailable on this runner." >&2
+            exit 1
+          fi
+          sudo chmod 666 /dev/kvm
+          "${EMULATOR}" -accel-check | tee "${acceleration_log}"
+
           nohup "${EMULATOR}" \
             -avd "${AVD_NAME}" \
+            -accel on \
+            -cores 2 \
+            -memory 2048 \
             -no-window \
             -gpu swiftshader_indirect \
             -noaudio \
             -no-boot-anim \
             -no-snapshot \
+            -no-metrics \
             -camera-back none \
             -camera-front none \
             -wipe-data \
             > "${emulator_log}" 2>&1 &
-          echo "emulator_pid=$!" >> "${GITHUB_OUTPUT}"
+          emulator_pid=$!
+          printf '%s\n' "${emulator_pid}" > "${RUNNER_TEMP}/emulator-api-${API_LEVEL}.pid"
 
-          "${ADB}" wait-for-device
-          deadline=$((SECONDS + 420))
+          if ! timeout 180 "${ADB}" wait-for-device; then
+            echo "ERROR: emulator did not appear in ADB within 180 seconds." >&2
+            tail -n 200 "${emulator_log}" >&2 || true
+            kill "${emulator_pid}" || true
+            exit 1
+          fi
+
+          deadline=$((SECONDS + 300))
           until [[ "$("${ADB}" shell getprop sys.boot_completed | tr -d '\r')" == "1" ]]; do
             if (( SECONDS >= deadline )); then
-              echo "ERROR: emulator did not finish booting." >&2
+              echo "ERROR: emulator did not finish booting within 300 seconds after ADB connection." >&2
               tail -n 200 "${emulator_log}" >&2 || true
               exit 1
             fi
@@ -167,3 +183,4 @@ jobs:
           path: |
             app/build/emulator-smoke/**
             ${{ runner.temp }}/emulator-api-${{ matrix.api-level }}.log
+            ${{ runner.temp }}/emulator-acceleration-api-${{ matrix.api-level }}.log
