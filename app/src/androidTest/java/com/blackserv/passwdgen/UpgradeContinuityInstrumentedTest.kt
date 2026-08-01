@@ -25,7 +25,7 @@ class UpgradeContinuityInstrumentedTest {
 
     @Test
     fun runRequestedUpgradePhase() {
-        when (instrumentation.arguments.getString(ARG_PHASE)) {
+        when (InstrumentationRegistry.getArguments().getString(ARG_PHASE)) {
             PHASE_SEED -> seedVersionN()
             PHASE_VERIFY -> verifyVersionNPlusOne()
             else -> error("Missing or invalid instrumentation argument: $ARG_PHASE")
