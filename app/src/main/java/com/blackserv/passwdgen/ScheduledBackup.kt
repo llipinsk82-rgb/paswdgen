@@ -162,8 +162,9 @@ internal class ScheduledBackupStore(
     )
 
     fun status(): ScheduledBackupStatus {
+        val version = preferences.getInt(KEY_CONFIGURATION_VERSION, LEGACY_CONFIGURATION_VERSION)
         val configured = hasRequiredConfiguration() &&
-            preferences.getInt(KEY_CONFIGURATION_VERSION, 0) == CONFIGURATION_VERSION
+            version in LEGACY_CONFIGURATION_VERSION..CONFIGURATION_VERSION
 
         return ScheduledBackupStatus(
             configured = configured,
@@ -227,8 +228,8 @@ internal class ScheduledBackupStore(
     fun loadKeyMaterial(): VaultBackupKeyMaterial? {
         if (!hasAnyConfiguration()) return null
 
-        val version = preferences.getInt(KEY_CONFIGURATION_VERSION, 0)
-        if (version != CONFIGURATION_VERSION) {
+        val version = preferences.getInt(KEY_CONFIGURATION_VERSION, LEGACY_CONFIGURATION_VERSION)
+        if (version !in LEGACY_CONFIGURATION_VERSION..CONFIGURATION_VERSION) {
             return rejectConfiguration(
                 "Nieobsługiwana wersja konfiguracji automatycznej kopii. Wybierz folder ponownie.",
             )
@@ -266,7 +267,14 @@ internal class ScheduledBackupStore(
                 salt = decodedSalt,
                 iterations = iterations,
                 keyBytes = unwrappedKey,
-            ).also { transferred = true }
+            ).also {
+                transferred = true
+                if (version == LEGACY_CONFIGURATION_VERSION) {
+                    preferences.edit()
+                        .putInt(KEY_CONFIGURATION_VERSION, CONFIGURATION_VERSION)
+                        .apply()
+                }
+            }
         } catch (error: Exception) {
             rejectConfiguration(
                 "Zapisany klucz automatycznej kopii jest uszkodzony lub niedostępny. Wybierz folder ponownie.",
@@ -318,7 +326,6 @@ internal class ScheduledBackupStore(
 
     @SuppressLint("ApplySharedPref")
     fun clear() {
-        // Persist the destructive preference clear before removing the wrapping key.
         check(preferences.edit().clear().commit()) {
             "Nie udało się usunąć konfiguracji automatycznej kopii."
         }
@@ -362,6 +369,7 @@ internal class ScheduledBackupStore(
 
     private companion object {
         const val PREFERENCES_NAME = "passwdgen.scheduled-backup.v1"
+        const val LEGACY_CONFIGURATION_VERSION = 0
         const val CONFIGURATION_VERSION = 1
         const val KEY_CONFIGURATION_VERSION = "configuration_version"
         const val KEY_TREE_URI = "tree_uri"
