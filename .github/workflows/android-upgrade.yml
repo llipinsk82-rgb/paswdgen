@@ -183,6 +183,7 @@ jobs:
           set -euo pipefail
           app_id="com.blackserv.passwdgen.preview2"
           test_runner="${app_id}.test/androidx.test.runner.AndroidJUnitRunner"
+          main_activity="com.blackserv.passwdgen.MainActivity"
           mkdir -p "${REPORT_DIR}"
           "${ADB}" logcat -c
 
@@ -201,7 +202,7 @@ jobs:
           grep -Eq 'versionCode=1002([[:space:]]|$)' "${REPORT_DIR}/package-n-plus-one.txt"
 
           "${ADB}" shell am force-stop "${app_id}"
-          "${ADB}" shell am start -W -n "${app_id}/.MainActivity" | tee "${REPORT_DIR}/launch-after-upgrade.txt"
+          "${ADB}" shell am start -W -n "${app_id}/${main_activity}" | tee "${REPORT_DIR}/launch-after-upgrade.txt"
           sleep 5
           "${ADB}" shell pidof "${app_id}" | tee "${REPORT_DIR}/pid-after-upgrade.txt"
           test -s "${REPORT_DIR}/pid-after-upgrade.txt"
