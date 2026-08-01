@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 
 internal enum class AppSection { GENERATOR, VAULT }
+internal enum class VaultTab { ENTRIES, BACKUP, MIGRATION }
 
 internal data class AppUiState(
     val section: AppSection = AppSection.GENERATOR,
@@ -25,6 +26,7 @@ internal data class AppUiState(
     val vaultBusy: Boolean = false,
     val entries: List<VaultEntry> = emptyList(),
     val searchQuery: String = "",
+    val vaultTab: VaultTab = VaultTab.ENTRIES,
     val scheduledBackup: ScheduledBackupStatus = ScheduledBackupStatus(),
     val csvImportPreview: CsvImportPreview? = null,
     val message: String? = null,
@@ -44,6 +46,8 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
         scheduledBackup.registerStatusListener(::refreshScheduledBackupStatus)
 
     fun selectSection(section: AppSection) = _state.update { it.copy(section = section) }
+
+    fun selectVaultTab(tab: VaultTab) = _state.update { it.copy(vaultTab = tab) }
 
     fun updateOptions(transform: (PasswordOptions) -> PasswordOptions) {
         val candidate = transform(_state.value.options)
@@ -90,6 +94,7 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
                 vaultBusy = false,
                 entries = emptyList(),
                 searchQuery = "",
+                vaultTab = VaultTab.ENTRIES,
                 csvImportPreview = null,
             )
         }
@@ -178,6 +183,7 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
                     it.copy(
                         vaultBusy = false,
                         entries = entries,
+                        vaultTab = VaultTab.ENTRIES,
                         scheduledBackup = scheduledBackup.status(),
                         message = "Odczytano $total wpisów; dodano lub zaktualizowano $changed.",
                     )
@@ -322,6 +328,7 @@ internal class MainViewModel(application: Application) : AndroidViewModel(applic
                     it.copy(
                         vaultBusy = false,
                         entries = entries,
+                        vaultTab = VaultTab.ENTRIES,
                         scheduledBackup = scheduledBackup.status(),
                         message = "Zaimportowano $changed rekordów CSV. Usuń jawny plik CSV z urządzenia i chmury.",
                     )
