@@ -2,11 +2,9 @@ name: Android upgrade continuity
 
 on:
   push:
-    branches:
-      - agent/android-vault-mvp
+    branches: [agent/android-vault-mvp]
   pull_request:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -21,7 +19,6 @@ jobs:
     name: Upgrade N to N+1 on API ${{ matrix.api-level }}
     runs-on: ubuntu-latest
     timeout-minutes: 50
-
     strategy:
       fail-fast: false
       matrix:
@@ -47,33 +44,20 @@ jobs:
         run: |
           set -euo pipefail
           android_home="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-          if [[ -z "${android_home}" ]]; then
-            echo "ERROR: ANDROID_SDK_ROOT and ANDROID_HOME are not set." >&2
-            exit 1
-          fi
+          test -n "${android_home}"
 
           sdkmanager_bin="$(command -v sdkmanager || true)"
-          if [[ -z "${sdkmanager_bin}" ]]; then
-            sdkmanager_bin="$(find "${android_home}/cmdline-tools" -type f -name sdkmanager 2>/dev/null | sort -V | tail -n 1)"
-          fi
+          [[ -n "${sdkmanager_bin}" ]] || sdkmanager_bin="$(find "${android_home}/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
           avdmanager_bin="$(command -v avdmanager || true)"
-          if [[ -z "${avdmanager_bin}" ]]; then
-            avdmanager_bin="$(find "${android_home}/cmdline-tools" -type f -name avdmanager 2>/dev/null | sort -V | tail -n 1)"
-          fi
-          if [[ -z "${sdkmanager_bin}" || ! -x "${sdkmanager_bin}" ]]; then
-            echo "ERROR: sdkmanager not found." >&2
-            exit 1
-          fi
-          if [[ -z "${avdmanager_bin}" || ! -x "${avdmanager_bin}" ]]; then
-            echo "ERROR: avdmanager not found." >&2
-            exit 1
-          fi
+          [[ -n "${avdmanager_bin}" ]] || avdmanager_bin="$(find "${android_home}/cmdline-tools" -type f -name avdmanager | sort -V | tail -n 1)"
+          test -x "${sdkmanager_bin}"
+          test -x "${avdmanager_bin}"
 
           system_image="system-images;android-${API_LEVEL};google_apis;x86_64"
           yes | "${sdkmanager_bin}" --licenses >/dev/null || true
           "${sdkmanager_bin}" --install \
-            "platform-tools" \
-            "emulator" \
+            platform-tools \
+            emulator \
             "platforms;android-36" \
             "build-tools;36.0.0" \
             "${system_image}"
@@ -85,12 +69,10 @@ jobs:
             --force \
             --name "${avd_name}" \
             --package "${system_image}"
-
           ANDROID_AVD_HOME="${avd_home}" "${android_home}/emulator/emulator" -list-avds \
             | tee "${RUNNER_TEMP}/upgrade-avd-list-api-${API_LEVEL}.txt" \
             | grep -Fxq "${avd_name}"
 
-          echo "android_home=${android_home}" >> "${GITHUB_OUTPUT}"
           echo "adb=${android_home}/platform-tools/adb" >> "${GITHUB_OUTPUT}"
           echo "apksigner=${android_home}/build-tools/36.0.0/apksigner" >> "${GITHUB_OUTPUT}"
           echo "emulator=${android_home}/emulator/emulator" >> "${GITHUB_OUTPUT}"
@@ -106,7 +88,7 @@ jobs:
         run: |
           set -euo pipefail
           package_dir="${RUNNER_TEMP}/passwdgen-upgrade-api-${API_LEVEL}"
-          report_dir="app/build/upgrade-continuity/api-${API_LEVEL}"
+          report_dir="${RUNNER_TEMP}/upgrade-report-api-${API_LEVEL}"
           mkdir -p "${package_dir}" "${report_dir}"
 
           ./gradlew --no-daemon --stacktrace clean \
@@ -114,25 +96,19 @@ jobs:
             -Ppasswdgen.versionCode=1001 \
             -Ppasswdgen.versionName=0.1.0-upgrade-n
           cp app/build/outputs/apk/debug/app-debug.apk "${package_dir}/passwdgen-n.apk"
-          cp app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
-            "${package_dir}/passwdgen-n-test.apk"
+          cp app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk "${package_dir}/passwdgen-n-test.apk"
 
           ./gradlew --no-daemon --stacktrace clean \
             :app:assembleDebug :app:assembleDebugAndroidTest \
             -Ppasswdgen.versionCode=1002 \
             -Ppasswdgen.versionName=0.1.0-upgrade-n-plus-one
           cp app/build/outputs/apk/debug/app-debug.apk "${package_dir}/passwdgen-n-plus-one.apk"
-          cp app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
-            "${package_dir}/passwdgen-n-plus-one-test.apk"
+          cp app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk "${package_dir}/passwdgen-n-plus-one-test.apk"
 
-          n_digest="$("${APKSIGNER}" verify --print-certs "${package_dir}/passwdgen-n.apk" \
-            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
-          n_plus_one_digest="$("${APKSIGNER}" verify --print-certs "${package_dir}/passwdgen-n-plus-one.apk" \
-            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
-          if [[ -z "${n_digest}" || "${n_digest}" != "${n_plus_one_digest}" ]]; then
-            echo "ERROR: APK signer mismatch between N and N+1." >&2
-            exit 1
-          fi
+          n_digest="$("${APKSIGNER}" verify --print-certs "${package_dir}/passwdgen-n.apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
+          n_plus_one_digest="$("${APKSIGNER}" verify --print-certs "${package_dir}/passwdgen-n-plus-one.apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
+          test -n "${n_digest}"
+          test "${n_digest}" = "${n_plus_one_digest}"
 
           {
             echo "N versionCode: 1001"
@@ -157,13 +133,9 @@ jobs:
           emulator_log="${RUNNER_TEMP}/upgrade-emulator-api-${API_LEVEL}.log"
           acceleration_log="${RUNNER_TEMP}/upgrade-emulator-acceleration-api-${API_LEVEL}.log"
 
-          if [[ ! -e /dev/kvm ]]; then
-            echo "ERROR: /dev/kvm is unavailable on this runner." >&2
-            exit 1
-          fi
+          test -e /dev/kvm
           sudo chmod 666 /dev/kvm
           "${EMULATOR}" -accel-check | tee "${acceleration_log}"
-
           nohup "${EMULATOR}" \
             -avd "${AVD_NAME}" \
             -accel on \
@@ -182,7 +154,6 @@ jobs:
           emulator_pid=$!
 
           if ! timeout 180 "${ADB}" wait-for-device; then
-            echo "ERROR: emulator did not appear in ADB within 180 seconds." >&2
             tail -n 200 "${emulator_log}" >&2 || true
             kill "${emulator_pid}" || true
             exit 1
@@ -191,13 +162,11 @@ jobs:
           deadline=$((SECONDS + 300))
           until [[ "$("${ADB}" shell getprop sys.boot_completed | tr -d '\r')" == "1" ]]; do
             if (( SECONDS >= deadline )); then
-              echo "ERROR: emulator did not finish booting." >&2
               tail -n 200 "${emulator_log}" >&2 || true
               exit 1
             fi
             sleep 5
           done
-
           "${ADB}" shell settings put global device_provisioned 1 || true
           "${ADB}" shell settings put secure user_setup_complete 1 || true
           "${ADB}" shell pm disable-user --user 0 com.google.android.setupwizard || true
@@ -215,52 +184,34 @@ jobs:
           app_id="com.blackserv.passwdgen.preview2"
           test_runner="${app_id}.test/androidx.test.runner.AndroidJUnitRunner"
           mkdir -p "${REPORT_DIR}"
-
           "${ADB}" logcat -c
-          "${ADB}" install --no-streaming "${PACKAGE_DIR}/passwdgen-n.apk" \
-            | tee "${REPORT_DIR}/install-n.txt"
-          "${ADB}" install --no-streaming "${PACKAGE_DIR}/passwdgen-n-test.apk" \
-            | tee "${REPORT_DIR}/install-n-test.txt"
 
-          "${ADB}" shell am instrument -w \
-            -e upgradePhase seed \
-            "${test_runner}" | tee "${REPORT_DIR}/instrumentation-seed.txt"
+          "${ADB}" install --no-streaming "${PACKAGE_DIR}/passwdgen-n.apk" | tee "${REPORT_DIR}/install-n.txt"
+          "${ADB}" install --no-streaming "${PACKAGE_DIR}/passwdgen-n-test.apk" | tee "${REPORT_DIR}/install-n-test.txt"
+          "${ADB}" shell am instrument -w -e upgradePhase seed "${test_runner}" | tee "${REPORT_DIR}/instrumentation-seed.txt"
           grep -Fq "OK (1 test)" "${REPORT_DIR}/instrumentation-seed.txt"
-          "${ADB}" shell dumpsys package "${app_id}" \
-            | tee "${REPORT_DIR}/package-n.txt"
+          "${ADB}" shell dumpsys package "${app_id}" | tee "${REPORT_DIR}/package-n.txt"
           grep -Eq 'versionCode=1001([[:space:]]|$)' "${REPORT_DIR}/package-n.txt"
 
-          "${ADB}" install --no-streaming -r "${PACKAGE_DIR}/passwdgen-n-plus-one.apk" \
-            | tee "${REPORT_DIR}/install-n-plus-one.txt"
-          "${ADB}" install --no-streaming -r "${PACKAGE_DIR}/passwdgen-n-plus-one-test.apk" \
-            | tee "${REPORT_DIR}/install-n-plus-one-test.txt"
-
-          "${ADB}" shell am instrument -w \
-            -e upgradePhase verify \
-            "${test_runner}" | tee "${REPORT_DIR}/instrumentation-verify.txt"
+          "${ADB}" install --no-streaming -r "${PACKAGE_DIR}/passwdgen-n-plus-one.apk" | tee "${REPORT_DIR}/install-n-plus-one.txt"
+          "${ADB}" install --no-streaming -r "${PACKAGE_DIR}/passwdgen-n-plus-one-test.apk" | tee "${REPORT_DIR}/install-n-plus-one-test.txt"
+          "${ADB}" shell am instrument -w -e upgradePhase verify "${test_runner}" | tee "${REPORT_DIR}/instrumentation-verify.txt"
           grep -Fq "OK (1 test)" "${REPORT_DIR}/instrumentation-verify.txt"
-          "${ADB}" shell dumpsys package "${app_id}" \
-            | tee "${REPORT_DIR}/package-n-plus-one.txt"
+          "${ADB}" shell dumpsys package "${app_id}" | tee "${REPORT_DIR}/package-n-plus-one.txt"
           grep -Eq 'versionCode=1002([[:space:]]|$)' "${REPORT_DIR}/package-n-plus-one.txt"
 
           "${ADB}" shell am force-stop "${app_id}"
-          "${ADB}" shell am start -W -n "${app_id}/.MainActivity" \
-            | tee "${REPORT_DIR}/launch-after-upgrade.txt"
+          "${ADB}" shell am start -W -n "${app_id}/.MainActivity" | tee "${REPORT_DIR}/launch-after-upgrade.txt"
           sleep 5
           "${ADB}" shell pidof "${app_id}" | tee "${REPORT_DIR}/pid-after-upgrade.txt"
           test -s "${REPORT_DIR}/pid-after-upgrade.txt"
-
-          "${ADB}" shell dumpsys activity activities \
-            | tee "${REPORT_DIR}/activities-after-upgrade.txt"
-          "${ADB}" logcat -d -v threadtime \
-            | tee "${REPORT_DIR}/logcat-after-upgrade.txt"
-          if grep -E "FATAL EXCEPTION|ANR in ${app_id}|Process ${app_id} .* has died" \
-            "${REPORT_DIR}/logcat-after-upgrade.txt"; then
-            echo "ERROR: crash or ANR signature detected after upgrade." >&2
+          "${ADB}" shell dumpsys activity activities | tee "${REPORT_DIR}/activities-after-upgrade.txt"
+          "${ADB}" logcat -d -v threadtime | tee "${REPORT_DIR}/logcat-after-upgrade.txt"
+          if grep -E "FATAL EXCEPTION|ANR in ${app_id}|Process ${app_id} .* has died" "${REPORT_DIR}/logcat-after-upgrade.txt"; then
             exit 1
           fi
-
           "${ADB}" exec-out screencap -p > "${REPORT_DIR}/screen-after-upgrade.png"
+
           {
             echo "API level: ${API_LEVEL}"
             echo "Result: PASS"
@@ -284,7 +235,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
           path: |
-            app/build/upgrade-continuity/**
+            ${{ runner.temp }}/upgrade-report-api-${{ matrix.api-level }}/**
             ${{ runner.temp }}/upgrade-emulator-api-${{ matrix.api-level }}.log
             ${{ runner.temp }}/upgrade-emulator-acceleration-api-${{ matrix.api-level }}.log
             ${{ runner.temp }}/upgrade-avd-list-api-${{ matrix.api-level }}.txt
