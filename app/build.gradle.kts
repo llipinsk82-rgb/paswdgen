@@ -17,6 +17,14 @@ val hasReleaseSigning = listOf(
     releaseKeyPassword,
 ).all { !it.isNullOrBlank() }
 
+val versionCodeProperty = providers.gradleProperty("passwdgen.versionCode").orNull
+val versionNameProperty = providers.gradleProperty("passwdgen.versionName").orNull
+val configuredVersionCode = versionCodeProperty?.toIntOrNull()
+    ?: if (versionCodeProperty == null) 1 else error("passwdgen.versionCode must be a positive integer")
+val configuredVersionName = versionNameProperty?.takeIf { it.isNotBlank() }
+    ?: if (versionNameProperty == null) "0.1.0" else error("passwdgen.versionName must not be blank")
+require(configuredVersionCode > 0) { "passwdgen.versionCode must be greater than zero" }
+
 android {
     namespace = "com.blackserv.passwdgen"
     compileSdk = 36
@@ -25,8 +33,8 @@ android {
         applicationId = "com.blackserv.passwdgen"
         minSdk = 30
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = configuredVersionCode
+        versionName = configuredVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -111,4 +119,8 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(libs.junit)
+
+    androidTestImplementation("androidx.test:core-ktx:1.7.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("junit:junit:4.13.2")
 }
