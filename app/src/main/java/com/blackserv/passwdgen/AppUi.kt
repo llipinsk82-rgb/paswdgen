@@ -167,7 +167,6 @@ private fun VaultScreen(
     var editing by remember { mutableStateOf<VaultEntry?>(null) }
     var creating by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<VaultEntry?>(null) }
-    var vaultTab by remember { mutableStateOf(VaultTab.ENTRIES) }
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
     val revealed = remember { mutableStateMapOf<String, Boolean>() }
     val filtered = remember(state.entries, state.searchQuery) {
@@ -184,22 +183,18 @@ private fun VaultScreen(
         }
     }
 
-    LaunchedEffect(state.entries) {
-        if (state.entries.isNotEmpty()) vaultTab = VaultTab.ENTRIES
-    }
-
     Column(
         modifier = modifier
             .fillMaxSize()
             .padding(horizontal = 14.dp),
     ) {
         VaultTabBar(
-            selected = vaultTab,
-            onSelect = { vaultTab = it },
+            selected = state.vaultTab,
+            onSelect = viewModel::selectVaultTab,
         )
         Spacer(Modifier.height(8.dp))
 
-        when (vaultTab) {
+        when (state.vaultTab) {
             VaultTab.ENTRIES -> {
                 PremiumVaultToolbar(
                     query = state.searchQuery,
@@ -337,8 +332,6 @@ private fun VaultScreen(
         )
     }
 }
-
-private enum class VaultTab { ENTRIES, BACKUP, MIGRATION }
 
 @Composable
 private fun VaultTabBar(
