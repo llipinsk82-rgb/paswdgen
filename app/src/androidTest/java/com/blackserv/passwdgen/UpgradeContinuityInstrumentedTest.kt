@@ -7,7 +7,6 @@ import android.security.keystore.KeyProperties
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.DataInputStream
@@ -88,17 +87,20 @@ class UpgradeContinuityInstrumentedTest {
         )
         assertEquals(PROBE_MARKER, preferences.getString(PREF_MARKER, null))
 
-        val storedKey = keyStore.getKey(KEY_ALIAS, null) as? SecretKey
-        assertNotNull("Android Keystore key was lost during upgrade", storedKey)
+        val storedKey = requireNotNull(keyStore.getKey(KEY_ALIAS, null) as? SecretKey) {
+            "Android Keystore key was lost during upgrade"
+        }
 
         val (iv, cipherText) = DataInputStream(context.openFileInput(PROBE_FILE)).use { input ->
             assertEquals(PROBE_FORMAT_VERSION, input.readInt())
             val ivLength = input.readInt()
             require(ivLength in 12..32) { "Invalid IV length: $ivLength" }
-            val iv = ByteArray(ivLength).also(input::readFully)
+            val iv = ByteArray(ivLength)
+            input.readFully(iv)
             val cipherTextLength = input.readInt()
             require(cipherTextLength in 16..4_096) { "Invalid ciphertext length: $cipherTextLength" }
-            val cipherText = ByteArray(cipherTextLength).also(input::readFully)
+            val cipherText = ByteArray(cipherTextLength)
+            input.readFully(cipherText)
             iv to cipherText
         }
 
