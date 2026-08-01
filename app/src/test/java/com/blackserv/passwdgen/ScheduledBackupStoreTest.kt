@@ -96,6 +96,22 @@ class ScheduledBackupStoreTest {
     }
 
     @Test
+    fun legacyConfigurationWithoutVersionIsMigratedAfterSuccessfulUnwrap() {
+        val preferences = InMemorySharedPreferences()
+        val store = ScheduledBackupStore(preferences, TestScheduledBackupKeyCipher())
+        val material = sampleMaterial()
+        store.saveConfiguration("content://documents/tree/backup", "Backup", true, material)
+        material.close()
+        preferences.edit().remove("configuration_version").commit()
+
+        assertTrue(store.status().configured)
+        val restored = requireNotNull(store.loadKeyMaterial())
+        restored.close()
+        assertEquals(1, preferences.getInt("configuration_version", -1))
+        assertTrue(store.status().enabled)
+    }
+
+    @Test
     fun incompatibleConfigurationVersionIsRejected() {
         val preferences = InMemorySharedPreferences()
         val store = ScheduledBackupStore(preferences, TestScheduledBackupKeyCipher())
