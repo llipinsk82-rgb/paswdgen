@@ -72,6 +72,14 @@ jobs:
             gradle/wrapper/gradle-wrapper.properties
           ./gradlew --version
 
+      - name: Create source snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/build
+          git archive --format=zip --output app/build/source-snapshot.zip HEAD
+          sha256sum app/build/source-snapshot.zip
+
       - name: Run unit tests
         shell: bash
         run: |
@@ -104,7 +112,7 @@ jobs:
           ./gradlew --no-daemon --stacktrace bundleRelease 2>&1 \
             | tee app/build/ci-logs/bundle-release.log
 
-      - name: Upload packages and reports
+      - name: Upload packages, reports and source snapshot
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
@@ -112,6 +120,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
           path: |
+            app/build/source-snapshot.zip
             app/build/ci-logs/**
             app/build/outputs/apk/debug/*.apk
             app/build/outputs/bundle/release/*.aab
