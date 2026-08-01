@@ -80,15 +80,22 @@ jobs:
             "${system_image}"
 
           avd_name="passwdgen-api-${API_LEVEL}"
-          echo no | "${avdmanager_bin}" create avd \
+          avd_home="${RUNNER_TEMP}/android-avd-api-${API_LEVEL}"
+          mkdir -p "${avd_home}"
+          printf 'no\n' | ANDROID_AVD_HOME="${avd_home}" "${avdmanager_bin}" create avd \
             --force \
             --name "${avd_name}" \
             --package "${system_image}"
+
+          ANDROID_AVD_HOME="${avd_home}" "${android_home}/emulator/emulator" -list-avds \
+            | tee "${RUNNER_TEMP}/avd-list-api-${API_LEVEL}.txt" \
+            | grep -Fxq "${avd_name}"
 
           echo "android_home=${android_home}" >> "${GITHUB_OUTPUT}"
           echo "adb=${android_home}/platform-tools/adb" >> "${GITHUB_OUTPUT}"
           echo "emulator=${android_home}/emulator/emulator" >> "${GITHUB_OUTPUT}"
           echo "avd_name=${avd_name}" >> "${GITHUB_OUTPUT}"
+          echo "avd_home=${avd_home}" >> "${GITHUB_OUTPUT}"
 
       - name: Build debug APK
         shell: bash
@@ -102,6 +109,7 @@ jobs:
           ADB: ${{ steps.android-sdk.outputs.adb }}
           EMULATOR: ${{ steps.android-sdk.outputs.emulator }}
           AVD_NAME: ${{ steps.android-sdk.outputs.avd_name }}
+          ANDROID_AVD_HOME: ${{ steps.android-sdk.outputs.avd_home }}
           API_LEVEL: ${{ matrix.api-level }}
         run: |
           set -euo pipefail
@@ -114,6 +122,8 @@ jobs:
           fi
           sudo chmod 666 /dev/kvm
           "${EMULATOR}" -accel-check | tee "${acceleration_log}"
+          "${EMULATOR}" -list-avds | tee "${RUNNER_TEMP}/avd-list-before-start-api-${API_LEVEL}.txt" \
+            | grep -Fxq "${AVD_NAME}"
 
           nohup "${EMULATOR}" \
             -avd "${AVD_NAME}" \
@@ -184,3 +194,5 @@ jobs:
             app/build/emulator-smoke/**
             ${{ runner.temp }}/emulator-api-${{ matrix.api-level }}.log
             ${{ runner.temp }}/emulator-acceleration-api-${{ matrix.api-level }}.log
+            ${{ runner.temp }}/avd-list-api-${{ matrix.api-level }}.txt
+            ${{ runner.temp }}/avd-list-before-start-api-${{ matrix.api-level }}.txt
