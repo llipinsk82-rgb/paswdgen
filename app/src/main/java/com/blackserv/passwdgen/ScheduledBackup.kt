@@ -1,5 +1,6 @@
 package com.blackserv.passwdgen
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -7,7 +8,6 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import android.util.Base64
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -18,16 +18,18 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.InputStream
 import java.io.IOException
+import java.io.InputStream
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import javax.crypto.Cipher
@@ -82,16 +84,86 @@ internal object ScheduledBackupNaming {
     }
 }
 
-internal class ScheduledBackupStore(context: Context) {
-    private val applicationContext = context.applicationContext
-    private val preferences = applicationContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+internal data class WrappedScheduledBackupKey(
+    val cipherText: ByteArray,
+    val iv: ByteArray,
+)
+
+internal interface ScheduledBackupKeyCipher {
+    fun wrap(value: ByteArray): WrappedScheduledBackupKey
+    fun unwrap(cipherText: ByteArray, iv: ByteArray): ByteArray
+    fun deleteKey()
+}
+
+private class AndroidKeystoreScheduledBackupKeyCipher : ScheduledBackupKeyCipher {
     private val keyStore = KeyStore.getInstance(KEYSTORE_PROVIDER).apply { load(null) }
 
+    override fun wrap(value: ByteArray): WrappedScheduledBackupKey {
+        require(value.size == KEY_BYTES) { "Nieprawidłowy klucz kopii." }
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, getOrCreateWrappingKey())
+        cipher.updateAAD(WRAPPING_AAD)
+        return WrappedScheduledBackupKey(cipher.doFinal(value), cipher.iv)
+    }
+
+    override fun unwrap(cipherText: ByteArray, iv: ByteArray): ByteArray {
+        val wrappingKey = keyStore.getKey(WRAPPING_KEY_ALIAS, null) as? SecretKey
+            ?: throw IllegalStateException("Brak klucza zabezpieczającego automatyczną kopię.")
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(
+            Cipher.DECRYPT_MODE,
+            wrappingKey,
+            GCMParameterSpec(GCM_TAG_BITS, iv),
+        )
+        cipher.updateAAD(WRAPPING_AAD)
+        return cipher.doFinal(cipherText)
+    }
+
+    override fun deleteKey() {
+        if (keyStore.containsAlias(WRAPPING_KEY_ALIAS)) keyStore.deleteEntry(WRAPPING_KEY_ALIAS)
+    }
+
+    private fun getOrCreateWrappingKey(): SecretKey {
+        (keyStore.getKey(WRAPPING_KEY_ALIAS, null) as? SecretKey)?.let { return it }
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE_PROVIDER)
+        generator.init(
+            KeyGenParameterSpec.Builder(
+                WRAPPING_KEY_ALIAS,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(KEY_BITS)
+                .setRandomizedEncryptionRequired(true)
+                .setUnlockedDeviceRequired(true)
+                .build(),
+        )
+        return generator.generateKey()
+    }
+
+    private companion object {
+        const val KEYSTORE_PROVIDER = "AndroidKeyStore"
+        const val WRAPPING_KEY_ALIAS = "passwdgen.backup.schedule.wrap.v1"
+        const val TRANSFORMATION = "AES/GCM/NoPadding"
+        const val GCM_TAG_BITS = 128
+        const val KEY_BITS = 256
+        const val KEY_BYTES = KEY_BITS / 8
+        val WRAPPING_AAD = "passwdgen-scheduled-backup-key-v1".encodeToByteArray()
+    }
+}
+
+internal class ScheduledBackupStore(
+    private val preferences: SharedPreferences,
+    private val keyCipher: ScheduledBackupKeyCipher,
+) {
+    constructor(context: Context) : this(
+        context.applicationContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE),
+        AndroidKeystoreScheduledBackupKeyCipher(),
+    )
+
     fun status(): ScheduledBackupStatus {
-        val configured = preferences.contains(KEY_TREE_URI) &&
-            preferences.contains(KEY_WRAPPED_KEY) &&
-            preferences.contains(KEY_KEY_IV) &&
-            preferences.contains(KEY_SALT)
+        val configured = hasRequiredConfiguration() &&
+            preferences.getInt(KEY_CONFIGURATION_VERSION, 0) == CONFIGURATION_VERSION
 
         return ScheduledBackupStatus(
             configured = configured,
@@ -112,11 +184,26 @@ internal class ScheduledBackupStore(context: Context) {
         targetLabel: String,
         wifiOnly: Boolean,
         material: VaultBackupKeyMaterial,
+    ) = saveConfiguration(treeUri.toString(), targetLabel, wifiOnly, material)
+
+    internal fun saveConfiguration(
+        treeUri: String,
+        targetLabel: String,
+        wifiOnly: Boolean,
+        material: VaultBackupKeyMaterial,
     ) {
-        val wrapped = wrap(material.keyBytes)
+        require(treeUri.isNotBlank()) { "Nieprawidłowy folder automatycznej kopii." }
+        require(material.salt.size == SALT_BYTES) { "Nieprawidłowa sól klucza kopii." }
+        require(material.iterations in MIN_ITERATIONS..MAX_ITERATIONS) {
+            "Nieprawidłowy parametr zabezpieczenia kopii."
+        }
+        require(material.keyBytes.size == KEY_BYTES) { "Nieprawidłowy klucz kopii." }
+
+        val wrapped = keyCipher.wrap(material.keyBytes)
         try {
             preferences.edit()
-                .putString(KEY_TREE_URI, treeUri.toString())
+                .putInt(KEY_CONFIGURATION_VERSION, CONFIGURATION_VERSION)
+                .putString(KEY_TREE_URI, treeUri)
                 .putString(KEY_TARGET_LABEL, targetLabel.take(256))
                 .putBoolean(KEY_WIFI_ONLY, wifiOnly)
                 .putBoolean(KEY_ENABLED, true)
@@ -138,18 +225,60 @@ internal class ScheduledBackupStore(context: Context) {
     }
 
     fun loadKeyMaterial(): VaultBackupKeyMaterial? {
-        if (!status().configured) return null
-        val salt = preferences.getString(KEY_SALT, null)?.fromBase64() ?: return null
-        val cipherText = preferences.getString(KEY_WRAPPED_KEY, null)?.fromBase64() ?: return null
-        val iv = preferences.getString(KEY_KEY_IV, null)?.fromBase64() ?: return null
-        val iterations = preferences.getInt(KEY_ITERATIONS, VaultBackupCodec.DEFAULT_ITERATIONS)
-        val keyBytes = try {
-            unwrap(cipherText, iv)
-        } finally {
-            cipherText.fill(0)
-            iv.fill(0)
+        if (!hasAnyConfiguration()) return null
+
+        val version = preferences.getInt(KEY_CONFIGURATION_VERSION, 0)
+        if (version != CONFIGURATION_VERSION) {
+            return rejectConfiguration(
+                "Nieobsługiwana wersja konfiguracji automatycznej kopii. Wybierz folder ponownie.",
+            )
         }
-        return VaultBackupKeyMaterial(salt = salt, iterations = iterations, keyBytes = keyBytes)
+        if (!hasRequiredConfiguration()) {
+            return rejectConfiguration(
+                "Konfiguracja automatycznej kopii jest niekompletna. Wybierz folder ponownie.",
+            )
+        }
+
+        var salt: ByteArray? = null
+        var cipherText: ByteArray? = null
+        var iv: ByteArray? = null
+        var keyBytes: ByteArray? = null
+        var transferred = false
+        return try {
+            val decodedSalt = requireNotNull(preferences.getString(KEY_SALT, null)).fromBase64()
+            val decodedCipherText = requireNotNull(preferences.getString(KEY_WRAPPED_KEY, null)).fromBase64()
+            val decodedIv = requireNotNull(preferences.getString(KEY_KEY_IV, null)).fromBase64()
+            salt = decodedSalt
+            cipherText = decodedCipherText
+            iv = decodedIv
+            val iterations = preferences.getInt(KEY_ITERATIONS, 0)
+
+            require(decodedSalt.size == SALT_BYTES)
+            require(decodedCipherText.size >= GCM_TAG_BYTES)
+            require(decodedIv.size == IV_BYTES)
+            require(iterations in MIN_ITERATIONS..MAX_ITERATIONS)
+
+            val unwrappedKey = keyCipher.unwrap(decodedCipherText, decodedIv)
+            keyBytes = unwrappedKey
+            require(unwrappedKey.size == KEY_BYTES)
+
+            VaultBackupKeyMaterial(
+                salt = decodedSalt,
+                iterations = iterations,
+                keyBytes = unwrappedKey,
+            ).also { transferred = true }
+        } catch (error: Exception) {
+            rejectConfiguration(
+                "Zapisany klucz automatycznej kopii jest uszkodzony lub niedostępny. Wybierz folder ponownie.",
+            )
+        } finally {
+            cipherText?.fill(0)
+            iv?.fill(0)
+            if (!transferred) {
+                salt?.fill(0)
+                keyBytes?.fill(0)
+            }
+        }
     }
 
     fun destination(): ScheduledBackupDestination? {
@@ -187,11 +316,13 @@ internal class ScheduledBackupStore(context: Context) {
         editor.apply()
     }
 
+    @SuppressLint("ApplySharedPref")
     fun clear() {
-        preferences.edit().clear().commit()
-        runCatching {
-            if (keyStore.containsAlias(WRAPPING_KEY_ALIAS)) keyStore.deleteEntry(WRAPPING_KEY_ALIAS)
+        // Persist the destructive preference clear before removing the wrapping key.
+        check(preferences.edit().clear().commit()) {
+            "Nie udało się usunąć konfiguracji automatycznej kopii."
         }
+        runCatching(keyCipher::deleteKey)
     }
 
     fun registerStatusListener(onChanged: () -> Unit): SharedPreferences.OnSharedPreferenceChangeListener {
@@ -204,53 +335,35 @@ internal class ScheduledBackupStore(context: Context) {
         preferences.unregisterOnSharedPreferenceChangeListener(listener)
     }
 
-    private fun wrap(value: ByteArray): WrappedValue {
-        require(value.size == 32) { "Nieprawidłowy klucz kopii." }
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, getOrCreateWrappingKey())
-        cipher.updateAAD(WRAPPING_AAD)
-        return WrappedValue(cipher.doFinal(value), cipher.iv)
-    }
+    private fun hasRequiredConfiguration(): Boolean =
+        preferences.contains(KEY_TREE_URI) &&
+            preferences.contains(KEY_WRAPPED_KEY) &&
+            preferences.contains(KEY_KEY_IV) &&
+            preferences.contains(KEY_SALT) &&
+            preferences.contains(KEY_ITERATIONS)
 
-    private fun unwrap(cipherText: ByteArray, iv: ByteArray): ByteArray {
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(
-            Cipher.DECRYPT_MODE,
-            getOrCreateWrappingKey(),
-            GCMParameterSpec(GCM_TAG_BITS, iv),
-        )
-        cipher.updateAAD(WRAPPING_AAD)
-        return cipher.doFinal(cipherText)
-    }
+    private fun hasAnyConfiguration(): Boolean =
+        preferences.contains(KEY_CONFIGURATION_VERSION) ||
+            preferences.contains(KEY_TREE_URI) ||
+            preferences.contains(KEY_WRAPPED_KEY) ||
+            preferences.contains(KEY_KEY_IV) ||
+            preferences.contains(KEY_SALT)
 
-    private fun getOrCreateWrappingKey(): SecretKey {
-        (keyStore.getKey(WRAPPING_KEY_ALIAS, null) as? SecretKey)?.let { return it }
-        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE_PROVIDER)
-        generator.init(
-            KeyGenParameterSpec.Builder(
-                WRAPPING_KEY_ALIAS,
-                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
-            )
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setKeySize(256)
-                .setRandomizedEncryptionRequired(true)
-                .setUnlockedDeviceRequired(true)
-                .build(),
-        )
-        return generator.generateKey()
+    private fun rejectConfiguration(message: String): VaultBackupKeyMaterial? {
+        recordFailure(message, disableSchedule = true)
+        return null
     }
 
     private fun SharedPreferences.longOrNull(key: String): Long? =
         if (contains(key)) getLong(key, 0L).takeIf { it > 0L } else null
 
-    private fun ByteArray.toBase64(): String = Base64.encodeToString(this, Base64.NO_WRAP)
-    private fun String.fromBase64(): ByteArray = Base64.decode(this, Base64.NO_WRAP)
-
-    private data class WrappedValue(val cipherText: ByteArray, val iv: ByteArray)
+    private fun ByteArray.toBase64(): String = Base64.getEncoder().encodeToString(this)
+    private fun String.fromBase64(): ByteArray = Base64.getDecoder().decode(this)
 
     private companion object {
         const val PREFERENCES_NAME = "passwdgen.scheduled-backup.v1"
+        const val CONFIGURATION_VERSION = 1
+        const val KEY_CONFIGURATION_VERSION = "configuration_version"
         const val KEY_TREE_URI = "tree_uri"
         const val KEY_TARGET_LABEL = "target_label"
         const val KEY_WIFI_ONLY = "wifi_only"
@@ -266,11 +379,12 @@ internal class ScheduledBackupStore(context: Context) {
         const val KEY_LAST_ERROR = "last_error"
         const val KEY_ENTRY_COUNT = "entry_count"
 
-        const val KEYSTORE_PROVIDER = "AndroidKeyStore"
-        const val WRAPPING_KEY_ALIAS = "passwdgen.backup.schedule.wrap.v1"
-        const val TRANSFORMATION = "AES/GCM/NoPadding"
-        const val GCM_TAG_BITS = 128
-        val WRAPPING_AAD = "passwdgen-scheduled-backup-key-v1".encodeToByteArray()
+        const val SALT_BYTES = 16
+        const val IV_BYTES = 12
+        const val KEY_BYTES = 32
+        const val GCM_TAG_BYTES = 16
+        const val MIN_ITERATIONS = 100_000
+        const val MAX_ITERATIONS = 2_000_000
     }
 }
 
@@ -439,6 +553,158 @@ internal object ScheduledBackupScheduler {
             .build()
 }
 
+internal interface ScheduledBackupDocumentStore {
+    fun create(displayName: String): String
+    fun write(documentId: String, source: InputStream)
+    fun read(documentId: String): InputStream
+    fun list(): List<BackupDocumentRef>
+    fun delete(documentId: String)
+}
+
+private class SafScheduledBackupDocumentStore(
+    context: Context,
+    private val treeUri: Uri,
+) : ScheduledBackupDocumentStore {
+    private val resolver = context.contentResolver
+    private val treeDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
+    private val parentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocumentId)
+
+    override fun create(displayName: String): String {
+        val documentUri = DocumentsContract.createDocument(
+            resolver,
+            parentUri,
+            VaultBackupCodec.MIME_TYPE,
+            displayName,
+        ) ?: throw IOException("Dostawca plików nie utworzył dokumentu kopii.")
+        return DocumentsContract.getDocumentId(documentUri)
+    }
+
+    override fun write(documentId: String, source: InputStream) {
+        resolver.openOutputStream(documentUri(documentId), "w")?.use { output ->
+            source.copyTo(output)
+            output.flush()
+        } ?: throw IOException("Nie udało się otworzyć dokumentu kopii do zapisu.")
+    }
+
+    override fun read(documentId: String): InputStream =
+        resolver.openInputStream(documentUri(documentId))
+            ?: throw IOException("Nie udało się zweryfikować zapisanej kopii.")
+
+    override fun list(): List<BackupDocumentRef> {
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, treeDocumentId)
+        val projection = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+        )
+        val documents = mutableListOf<BackupDocumentRef>()
+        resolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+            val idIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+            val nameIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            val modifiedIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+            while (cursor.moveToNext()) {
+                documents += BackupDocumentRef(
+                    documentId = cursor.getString(idIndex),
+                    displayName = cursor.getString(nameIndex).orEmpty(),
+                    lastModified = if (cursor.isNull(modifiedIndex)) 0L else cursor.getLong(modifiedIndex),
+                )
+            }
+        }
+        return documents
+    }
+
+    override fun delete(documentId: String) {
+        DocumentsContract.deleteDocument(resolver, documentUri(documentId))
+    }
+
+    private fun documentUri(documentId: String): Uri =
+        DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)
+}
+
+internal class ScheduledBackupTransfer(
+    private val documents: ScheduledBackupDocumentStore,
+    private val now: () -> Long = System::currentTimeMillis,
+    private val zoneId: ZoneId = ZoneId.systemDefault(),
+) {
+    fun uploadAndRotate(snapshot: File): String {
+        val fileName = ScheduledBackupNaming.fileName(now(), zoneId)
+        val documentId = documents.create(fileName)
+        try {
+            snapshot.inputStream().use { documents.write(documentId, it) }
+
+            val localHash = snapshot.inputStream().use(::sha256)
+            val remoteHash = documents.read(documentId).use(::sha256)
+            if (!localHash.contentEquals(remoteHash)) {
+                throw IOException("Weryfikacja zapisanej kopii nie powiodła się.")
+            }
+
+            runCatching { rotateOldBackups() }
+            return fileName
+        } catch (error: Throwable) {
+            runCatching { documents.delete(documentId) }
+            throw error
+        }
+    }
+
+    private fun rotateOldBackups() {
+        ScheduledBackupNaming.selectForDeletion(documents.list()).forEach {
+            documents.delete(it.documentId)
+        }
+    }
+
+    private fun sha256(input: InputStream): ByteArray {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            digest.update(buffer, 0, read)
+        }
+        return digest.digest()
+    }
+}
+
+internal enum class ScheduledBackupWorkDisposition { RETRY, FAILURE }
+
+internal data class ScheduledBackupFailureDecision(
+    val disposition: ScheduledBackupWorkDisposition,
+    val message: String,
+    val disableSchedule: Boolean,
+)
+
+internal object ScheduledBackupWorkerPolicy {
+    private const val MAX_RETRY_ATTEMPTS = 3
+
+    fun forFailure(error: Throwable, runAttemptCount: Int): ScheduledBackupFailureDecision = when (error) {
+        is SecurityException -> ScheduledBackupFailureDecision(
+            disposition = ScheduledBackupWorkDisposition.FAILURE,
+            message = "Utracono dostęp do folderu kopii. Wybierz folder ponownie.",
+            disableSchedule = true,
+        )
+        is IOException -> {
+            val retry = runAttemptCount < MAX_RETRY_ATTEMPTS - 1
+            ScheduledBackupFailureDecision(
+                disposition = if (retry) {
+                    ScheduledBackupWorkDisposition.RETRY
+                } else {
+                    ScheduledBackupWorkDisposition.FAILURE
+                },
+                message = if (retry) {
+                    "Nie udało się zapisać kopii. Android spróbuje ponownie."
+                } else {
+                    "Nie udało się zapisać kopii po kilku próbach."
+                },
+                disableSchedule = false,
+            )
+        }
+        else -> ScheduledBackupFailureDecision(
+            disposition = ScheduledBackupWorkDisposition.FAILURE,
+            message = "Automatyczna kopia zakończyła się błędem.",
+            disableSchedule = false,
+        )
+    }
+}
+
 internal class ScheduledVaultBackupWorker(
     applicationContext: Context,
     parameters: WorkerParameters,
@@ -454,102 +720,25 @@ internal class ScheduledVaultBackupWorker(
 
         store.recordAttempt()
         try {
-            val fileName = uploadSnapshot(destination.treeUri, snapshot)
-            rotateOldBackups(destination.treeUri)
+            val transfer = ScheduledBackupTransfer(
+                SafScheduledBackupDocumentStore(applicationContext, destination.treeUri),
+            )
+            val fileName = transfer.uploadAndRotate(snapshot)
             store.recordSuccess(fileName)
             Result.success()
-        } catch (error: SecurityException) {
-            store.recordFailure("Utracono dostęp do folderu kopii. Wybierz folder ponownie.", disableSchedule = true)
-            Result.failure()
-        } catch (error: IOException) {
-            val message = if (runAttemptCount < MAX_RETRY_ATTEMPTS - 1) {
-                "Nie udało się zapisać kopii. Android spróbuje ponownie."
-            } else {
-                "Nie udało się zapisać kopii po kilku próbach."
-            }
-            store.recordFailure(message)
-            if (runAttemptCount < MAX_RETRY_ATTEMPTS - 1) Result.retry() else Result.failure()
-        } catch (error: Exception) {
-            store.recordFailure("Automatyczna kopia zakończyła się błędem.")
-            Result.failure()
-        }
-    }
-
-    private fun uploadSnapshot(treeUri: Uri, snapshot: File): String {
-        val resolver = applicationContext.contentResolver
-        val treeDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
-        val parentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocumentId)
-        val fileName = ScheduledBackupNaming.fileName(System.currentTimeMillis())
-        val documentUri = DocumentsContract.createDocument(
-            resolver,
-            parentUri,
-            VaultBackupCodec.MIME_TYPE,
-            fileName,
-        ) ?: throw IOException("Dostawca plików nie utworzył dokumentu kopii.")
-
-        try {
-            resolver.openOutputStream(documentUri, "w")?.use { output ->
-                snapshot.inputStream().use { input -> input.copyTo(output) }
-                output.flush()
-            } ?: throw IOException("Nie udało się otworzyć dokumentu kopii do zapisu.")
-
-            val localHash = snapshot.inputStream().use(::sha256)
-            val remoteHash = resolver.openInputStream(documentUri)?.use(::sha256)
-                ?: throw IOException("Nie udało się zweryfikować zapisanej kopii.")
-            if (!localHash.contentEquals(remoteHash)) {
-                throw IOException("Weryfikacja zapisanej kopii nie powiodła się.")
-            }
-            return fileName
-        } catch (error: Throwable) {
-            runCatching { DocumentsContract.deleteDocument(resolver, documentUri) }
+        } catch (error: CancellationException) {
             throw error
-        }
-    }
-
-    private fun rotateOldBackups(treeUri: Uri) {
-        runCatching {
-            val resolver = applicationContext.contentResolver
-            val treeId = DocumentsContract.getTreeDocumentId(treeUri)
-            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, treeId)
-            val projection = arrayOf(
-                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                DocumentsContract.Document.COLUMN_LAST_MODIFIED,
-            )
-            val documents = mutableListOf<BackupDocumentRef>()
-            resolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
-                val idIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-                val nameIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                val modifiedIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
-                while (cursor.moveToNext()) {
-                    documents += BackupDocumentRef(
-                        documentId = cursor.getString(idIndex),
-                        displayName = cursor.getString(nameIndex).orEmpty(),
-                        lastModified = if (cursor.isNull(modifiedIndex)) 0L else cursor.getLong(modifiedIndex),
-                    )
-                }
-            }
-
-            ScheduledBackupNaming.selectForDeletion(documents).forEach { document ->
-                val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, document.documentId)
-                DocumentsContract.deleteDocument(resolver, uri)
+        } catch (error: Exception) {
+            val decision = ScheduledBackupWorkerPolicy.forFailure(error, runAttemptCount)
+            store.recordFailure(decision.message, decision.disableSchedule)
+            when (decision.disposition) {
+                ScheduledBackupWorkDisposition.RETRY -> Result.retry()
+                ScheduledBackupWorkDisposition.FAILURE -> Result.failure()
             }
         }
-    }
-
-    private fun sha256(input: InputStream): ByteArray {
-        val digest = MessageDigest.getInstance("SHA-256")
-        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-        while (true) {
-            val read = input.read(buffer)
-            if (read < 0) break
-            digest.update(buffer, 0, read)
-        }
-        return digest.digest()
     }
 
     private companion object {
         const val MAX_BACKUP_BYTES = 16L * 1024L * 1024L
-        const val MAX_RETRY_ATTEMPTS = 3
     }
 }
