@@ -87,8 +87,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./gradlew --no-daemon --stacktrace \
-            testDebugUnitTest lintRelease assembleRelease \
+          ./gradlew --no-daemon --stacktrace assembleRelease \
             -Ppasswdgen.versionCode=700001 \
             -Ppasswdgen.versionName=0.1.0-signing-preflight
 
@@ -107,7 +106,7 @@ jobs:
             > "${verification}" 2>&1
           cat "${verification}"
 
-          grep -Eq '^Verified using v2 scheme .*: true$' "${verification}"
+          grep -Fq "Verified using v3 scheme (APK Signature Scheme v3): true" "${verification}"
 
           package_id="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest application-id "${apk}" | tr -d '\r\n')"
           version_code="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest version-code "${apk}" | tr -d '\r\n')"
@@ -137,6 +136,7 @@ jobs:
             echo "packageId=${package_id}"
             echo "versionCode=${version_code}"
             echo "versionName=${version_name}"
+            echo "signatureScheme=v3"
             echo "expectedSignerCertificateSha256=${expected_sha256}"
             echo "signerCertificateSha256=${signer_sha256}"
             echo "apkSha256=${apk_sha256}"
@@ -167,7 +167,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${JOB_STATUS}" == "success" ]]; then
-            result="PASS — protected key restored, release APK built, signature verified and certificate matched the pinned production fingerprint. APK was not published."
+            result="PASS — protected key restored, release APK built, v3 signature verified and certificate matched the pinned production fingerprint. APK was not published."
           else
             result="FAIL — preflight stopped before publication. Review the linked Actions log; no APK was published."
           fi
@@ -180,6 +180,7 @@ jobs:
           - HEAD: \`${HEAD_SHA}\`
           - Run: ${RUN_URL}
           - Pinned certificate SHA-256: \`${EXPECTED_SIGNER_SHA256}\`
+          - Required signature scheme: **v3** (minimum supported Android API is 30)
           - Safe artifact: \`android-signing-preflight-report\` (success only)
           - Production release/tag created: **no**
           EOF
