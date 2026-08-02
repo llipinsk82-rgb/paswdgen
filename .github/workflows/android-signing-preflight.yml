@@ -103,25 +103,34 @@ jobs:
           mkdir -p "${report_dir}"
           test -s "${apk}"
 
-          "${build_tools}/apksigner" verify --verbose --print-certs "${apk}" > "${verification}"
-          grep -Fq "Verified using v2 scheme (APK Signature Scheme v2): true" "${verification}"
+          "${build_tools}/apksigner" verify --verbose --print-certs "${apk}" \
+            > "${verification}" 2>&1
+          cat "${verification}"
 
-          package_id="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest application-id "${apk}")"
-          version_code="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest version-code "${apk}")"
-          version_name="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest version-name "${apk}")"
-          signer_sha256="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "${verification}" | head -n 1 | tr '[:upper:]' '[:lower:]')"
-          expected_sha256="$(printf '%s' "${EXPECTED_SIGNER_SHA256}" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          grep -Eq '^Verified using v2 scheme .*: true$' "${verification}"
+
+          package_id="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest application-id "${apk}" | tr -d '\r\n')"
+          version_code="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest version-code "${apk}" | tr -d '\r\n')"
+          version_name="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest version-name "${apk}" | tr -d '\r\n')"
+          signer_line="$(grep -Eim1 'certificate SHA-256 digest:' "${verification}" || true)"
+          signer_sha256="$(printf '%s' "${signer_line}" \
+            | sed -E 's/^.*digest:[[:space:]]*//' \
+            | tr -d '[:space:]:' \
+            | tr '[:upper:]' '[:lower:]')"
+          expected_sha256="$(printf '%s' "${EXPECTED_SIGNER_SHA256}" \
+            | tr -d '[:space:]:' \
+            | tr '[:upper:]' '[:lower:]')"
           apk_sha256="$(sha256sum "${apk}" | awk '{print $1}')"
+
+          echo "packageId=${package_id}"
+          echo "versionCode=${version_code}"
+          echo "versionName=${version_name}"
+          echo "expectedSignerCertificateSha256=${expected_sha256}"
+          echo "signerCertificateSha256=${signer_sha256}"
 
           test "${package_id}" = "com.blackserv.passwdgen"
           test "${version_code}" = "700001"
-          test -n "${signer_sha256}"
-          if [[ "${signer_sha256}" != "${expected_sha256}" ]]; then
-            echo "Signer certificate mismatch." >&2
-            echo "Expected: ${expected_sha256}" >&2
-            echo "Actual:   ${signer_sha256}" >&2
-            exit 1
-          fi
+          test "${signer_sha256}" = "${expected_sha256}"
 
           {
             echo "result=PASS"
