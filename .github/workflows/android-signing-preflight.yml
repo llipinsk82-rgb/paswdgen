@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 concurrency:
   group: android-signing-preflight-${{ github.ref }}
@@ -135,3 +136,21 @@ jobs:
         if: always()
         shell: bash
         run: rm -f "${RUNNER_TEMP}/passwdgen-release.jks"
+
+      - name: Report safe result to Issue 6
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${JOB_STATUS}" == "success" ]]; then
+            result="PASS — protected key restored, release APK built and signature verified. APK was not published."
+          else
+            result="FAIL — preflight stopped before publication. Review the linked Actions log; no APK was published."
+          fi
+
+          gh issue comment 6 --body "### Android signing preflight\n\n- Result: **${result}**\n- HEAD: \`${HEAD_SHA}\`\n- Run: ${RUN_URL}\n- Safe artifact: \`android-signing-preflight-report\` (success only)\n- Production release/tag created: **no**"
