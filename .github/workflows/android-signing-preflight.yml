@@ -20,6 +20,8 @@ jobs:
     name: Validate protected Android signing
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    env:
+      EXPECTED_SIGNER_SHA256: "4bbe62f2bad5733fcc1585ed6fe437bedeb181ffb3637a0a067138d2131c90b1"
 
     steps:
       - name: Checkout repository
@@ -90,7 +92,7 @@ jobs:
             -Ppasswdgen.versionCode=700001 \
             -Ppasswdgen.versionName=0.1.0-signing-preflight
 
-      - name: Verify signed package
+      - name: Verify signed package and pinned certificate
         shell: bash
         run: |
           set -euo pipefail
@@ -107,18 +109,26 @@ jobs:
           package_id="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest application-id "${apk}")"
           version_code="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest version-code "${apk}")"
           version_name="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest version-name "${apk}")"
-          signer_sha256="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "${verification}" | head -n 1)"
+          signer_sha256="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "${verification}" | head -n 1 | tr '[:upper:]' '[:lower:]')"
+          expected_sha256="$(printf '%s' "${EXPECTED_SIGNER_SHA256}" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
           apk_sha256="$(sha256sum "${apk}" | awk '{print $1}')"
 
           test "${package_id}" = "com.blackserv.passwdgen"
           test "${version_code}" = "700001"
           test -n "${signer_sha256}"
+          if [[ "${signer_sha256}" != "${expected_sha256}" ]]; then
+            echo "Signer certificate mismatch." >&2
+            echo "Expected: ${expected_sha256}" >&2
+            echo "Actual:   ${signer_sha256}" >&2
+            exit 1
+          fi
 
           {
             echo "result=PASS"
             echo "packageId=${package_id}"
             echo "versionCode=${version_code}"
             echo "versionName=${version_name}"
+            echo "expectedSignerCertificateSha256=${expected_sha256}"
             echo "signerCertificateSha256=${signer_sha256}"
             echo "apkSha256=${apk_sha256}"
             echo "apkPublished=false"
@@ -148,9 +158,20 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${JOB_STATUS}" == "success" ]]; then
-            result="PASS — protected key restored, release APK built and signature verified. APK was not published."
+            result="PASS — protected key restored, release APK built, signature verified and certificate matched the pinned production fingerprint. APK was not published."
           else
             result="FAIL — preflight stopped before publication. Review the linked Actions log; no APK was published."
           fi
 
-          gh issue comment 6 --body "### Android signing preflight\n\n- Result: **${result}**\n- HEAD: \`${HEAD_SHA}\`\n- Run: ${RUN_URL}\n- Safe artifact: \`android-signing-preflight-report\` (success only)\n- Production release/tag created: **no**"
+          comment_file="${RUNNER_TEMP}/signing-preflight-comment.md"
+          cat > "${comment_file}" <<EOF
+          ### Android signing preflight
+
+          - Result: **${result}**
+          - HEAD: \`${HEAD_SHA}\`
+          - Run: ${RUN_URL}
+          - Pinned certificate SHA-256: \`${EXPECTED_SIGNER_SHA256}\`
+          - Safe artifact: \`android-signing-preflight-report\` (success only)
+          - Production release/tag created: **no**
+          EOF
+          gh issue comment 6 --body-file "${comment_file}"
