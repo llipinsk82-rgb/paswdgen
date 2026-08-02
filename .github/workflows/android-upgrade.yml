@@ -3,8 +3,26 @@ name: Android upgrade continuity
 on:
   push:
     branches: [agent/android-vault-mvp]
+    paths:
+      - app/**
+      - gradle/**
+      - build.gradle.kts
+      - settings.gradle.kts
+      - gradle.properties
+      - gradlew
+      - gradlew.bat
+      - .github/workflows/android-upgrade.yml
   pull_request:
     branches: [main]
+    paths:
+      - app/**
+      - gradle/**
+      - build.gradle.kts
+      - settings.gradle.kts
+      - gradle.properties
+      - gradlew
+      - gradlew.bat
+      - .github/workflows/android-upgrade.yml
   workflow_dispatch:
 
 permissions:
