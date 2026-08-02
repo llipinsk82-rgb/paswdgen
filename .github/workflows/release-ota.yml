@@ -91,23 +91,25 @@ jobs:
           mkdir -p "${release_dir}"
           cp "${source_apk}" "${release_apk}"
 
-          "${build_tools}/apksigner" verify --verbose --print-certs "${release_apk}" > "${verification}"
-          grep -Fq "Verified using v2 scheme (APK Signature Scheme v2): true" "${verification}"
+          "${build_tools}/apksigner" verify --verbose --print-certs "${release_apk}" \
+            > "${verification}" 2>&1
+          cat "${verification}"
+          grep -Fq "Verified using v3 scheme (APK Signature Scheme v3): true" "${verification}"
 
-          package_id="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest application-id "${release_apk}")"
-          version_code="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest version-code "${release_apk}")"
-          version_name="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest version-name "${release_apk}")"
-          signer_sha256="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "${verification}" | head -n 1 | tr '[:upper:]' '[:lower:]')"
-          expected_sha256="$(printf '%s' "${EXPECTED_SIGNER_SHA256}" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          package_id="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest application-id "${release_apk}" | tr -d '\r\n')"
+          version_code="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest version-code "${release_apk}" | tr -d '\r\n')"
+          version_name="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest version-name "${release_apk}" | tr -d '\r\n')"
+          signer_line="$(grep -Eim1 'certificate SHA-256 digest:' "${verification}" || true)"
+          signer_sha256="$(printf '%s' "${signer_line}" \
+            | sed -E 's/^.*digest:[[:space:]]*//' \
+            | tr -d '[:space:]:' \
+            | tr '[:upper:]' '[:lower:]')"
+          expected_sha256="$(printf '%s' "${EXPECTED_SIGNER_SHA256}" \
+            | tr -d '[:space:]:' \
+            | tr '[:upper:]' '[:lower:]')"
 
           test "${package_id}" = "com.blackserv.passwdgen"
-          test -n "${signer_sha256}"
-          if [[ "${signer_sha256}" != "${expected_sha256}" ]]; then
-            echo "Release signer certificate mismatch." >&2
-            echo "Expected: ${expected_sha256}" >&2
-            echo "Actual:   ${signer_sha256}" >&2
-            exit 1
-          fi
+          test "${signer_sha256}" = "${expected_sha256}"
 
           expected_tag="v${version_name}"
           if [[ "${GITHUB_REF_NAME}" != "${expected_tag}" ]]; then
@@ -126,6 +128,7 @@ jobs:
             > "${release_dir}/update.json"
 
           echo "Pinned production signer verified: ${signer_sha256}"
+          echo "APK Signature Scheme v3 verified."
           echo "release_dir=${release_dir}" >> "${GITHUB_OUTPUT}"
           echo "version_name=${version_name}" >> "${GITHUB_OUTPUT}"
 
