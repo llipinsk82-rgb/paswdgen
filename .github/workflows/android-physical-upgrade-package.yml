@@ -1,0 +1,230 @@
+name: Android physical upgrade package
+
+on:
+  push:
+    branches: [agent/android-vault-mvp]
+    paths:
+      - .github/workflows/android-physical-upgrade-package.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: android-physical-upgrade-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package-upgrade-pair:
+    name: Build signed N and N+1 APKs
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      EXPECTED_SIGNER_SHA256: "4bbe62f2bad5733fcc1585ed6fe437bedeb181ffb3637a0a067138d2131c90b1"
+      VERSION_CODE_N: "10"
+      VERSION_CODE_N_PLUS_1: "11"
+      VERSION_NAME_N: "0.1.0-physical-n"
+      VERSION_NAME_N_PLUS_1: "0.1.1-physical-nplus1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager_bin="$(command -v sdkmanager || true)"
+          if [[ -z "${sdkmanager_bin}" ]]; then
+            sdkmanager_bin="$(find "${ANDROID_SDK_ROOT}/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          fi
+          test -x "${sdkmanager_bin}"
+          yes | "${sdkmanager_bin}" --licenses >/dev/null || true
+          "${sdkmanager_bin}" --install \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            platform-tools
+
+      - name: Verify Gradle Wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "81a82aaea5abcc8ff68b3dfcb58b3c3c429378efd98e7433460610fecd7ae45f  gradle/wrapper/gradle-wrapper.jar" \
+            | sha256sum --check --strict
+          grep -Fx "distributionSha256Sum=20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78" \
+            gradle/wrapper/gradle-wrapper.properties
+
+      - name: Restore protected signing key
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${KEYSTORE_BASE64:?Missing ANDROID_KEYSTORE_BASE64 secret}"
+          : "${ANDROID_KEYSTORE_PASSWORD:?Missing ANDROID_KEYSTORE_PASSWORD secret}"
+          : "${ANDROID_KEY_ALIAS:?Missing ANDROID_KEY_ALIAS secret}"
+          : "${ANDROID_KEY_PASSWORD:?Missing ANDROID_KEY_PASSWORD secret}"
+
+          umask 077
+          keystore_file="${RUNNER_TEMP}/passwdgen-release.jks"
+          printf '%s' "${KEYSTORE_BASE64}" | base64 --decode > "${keystore_file}"
+          test -s "${keystore_file}"
+
+          echo "ANDROID_KEYSTORE_FILE=${keystore_file}" >> "${GITHUB_ENV}"
+          echo "ANDROID_KEYSTORE_PASSWORD=${ANDROID_KEYSTORE_PASSWORD}" >> "${GITHUB_ENV}"
+          echo "ANDROID_KEY_ALIAS=${ANDROID_KEY_ALIAS}" >> "${GITHUB_ENV}"
+          echo "ANDROID_KEY_PASSWORD=${ANDROID_KEY_PASSWORD}" >> "${GITHUB_ENV}"
+
+      - name: Build version N
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon --stacktrace \
+            testDebugUnitTest lintRelease assembleRelease \
+            -Ppasswdgen.versionCode="${VERSION_CODE_N}" \
+            -Ppasswdgen.versionName="${VERSION_NAME_N}"
+
+          package_dir="${RUNNER_TEMP}/physical-upgrade-package"
+          mkdir -p "${package_dir}"
+          cp app/build/outputs/apk/release/app-release.apk \
+            "${package_dir}/PasswdGen-N-vc${VERSION_CODE_N}.apk"
+
+      - name: Build version N+1
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon --stacktrace clean assembleRelease \
+            -Ppasswdgen.versionCode="${VERSION_CODE_N_PLUS_1}" \
+            -Ppasswdgen.versionName="${VERSION_NAME_N_PLUS_1}"
+
+          package_dir="${RUNNER_TEMP}/physical-upgrade-package"
+          cp app/build/outputs/apk/release/app-release.apk \
+            "${package_dir}/PasswdGen-Nplus1-vc${VERSION_CODE_N_PLUS_1}.apk"
+
+      - name: Verify package, versions, signatures and certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_tools="${ANDROID_SDK_ROOT}/build-tools/36.0.0"
+          analyzer="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer"
+          package_dir="${RUNNER_TEMP}/physical-upgrade-package"
+          apk_n="${package_dir}/PasswdGen-N-vc${VERSION_CODE_N}.apk"
+          apk_n1="${package_dir}/PasswdGen-Nplus1-vc${VERSION_CODE_N_PLUS_1}.apk"
+          report="${package_dir}/VERIFY.txt"
+          expected="$(printf '%s' "${EXPECTED_SIGNER_SHA256}" | tr -d '[:space:]:' | tr '[:upper:]' '[:lower:]')"
+
+          verify_apk() {
+            local apk="$1"
+            local expected_code="$2"
+            local output
+            output="$(mktemp)"
+            "${build_tools}/apksigner" verify --verbose --print-certs "${apk}" > "${output}" 2>&1
+            grep -Eq '^Verified using v3 scheme .*: true$' "${output}"
+
+            local package_id version_code signer
+            package_id="$("${analyzer}" manifest application-id "${apk}" | tr -d '\r\n')"
+            version_code="$("${analyzer}" manifest version-code "${apk}" | tr -d '\r\n')"
+            signer="$(grep -Eim1 'certificate SHA-256 digest:' "${output}" \
+              | sed -E 's/^.*digest:[[:space:]]*//' \
+              | tr -d '[:space:]:' \
+              | tr '[:upper:]' '[:lower:]')"
+
+            test "${package_id}" = "com.blackserv.passwdgen"
+            test "${version_code}" = "${expected_code}"
+            test "${signer}" = "${expected}"
+            printf '%s' "${signer}"
+            rm -f "${output}"
+          }
+
+          signer_n="$(verify_apk "${apk_n}" "${VERSION_CODE_N}")"
+          signer_n1="$(verify_apk "${apk_n1}" "${VERSION_CODE_N_PLUS_1}")"
+          test "${signer_n}" = "${signer_n1}"
+
+          sha_n="$(sha256sum "${apk_n}" | awk '{print $1}')"
+          sha_n1="$(sha256sum "${apk_n1}" | awk '{print $1}')"
+
+          cat > "${report}" <<EOF
+          PasswdGen physical production-signed upgrade package
+          HEAD=${GITHUB_SHA}
+          packageId=com.blackserv.passwdgen
+          signerCertificateSha256=${signer_n}
+          signatureScheme=v3
+          N.versionCode=${VERSION_CODE_N}
+          N.versionName=${VERSION_NAME_N}
+          N.sha256=${sha_n}
+          Nplus1.versionCode=${VERSION_CODE_N_PLUS_1}
+          Nplus1.versionName=${VERSION_NAME_N_PLUS_1}
+          Nplus1.sha256=${sha_n1}
+          releasePublished=false
+          tagCreated=false
+          EOF
+
+          cat > "${package_dir}/README-TEST.txt" <<'EOF'
+          1. Install PasswdGen-N-vc10.apk.
+          2. Open the app and create at least three vault records with distinct data.
+          3. Test unlock, copy login/password, search and one .pgvault export.
+          4. Do NOT uninstall the app and do NOT clear its data.
+          5. Install PasswdGen-Nplus1-vc11.apk over the existing app.
+          6. Confirm Android treats it as an update, not a new app.
+          7. Confirm all records remain readable and editable after unlocking.
+          8. Confirm the previously exported .pgvault backup can still be selected.
+          9. Record phone model, Android version and every PASS/FAIL result.
+          EOF
+
+          cat "${report}"
+
+      - name: Upload signed physical upgrade package
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: passwdgen-production-signed-physical-upgrade-pair
+          retention-days: 14
+          if-no-files-found: error
+          path: ${{ runner.temp }}/physical-upgrade-package/
+
+      - name: Remove signing material
+        if: always()
+        shell: bash
+        run: rm -f "${RUNNER_TEMP}/passwdgen-release.jks"
+
+      - name: Report safe result to Issue 5
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${JOB_STATUS}" == "success" ]]; then
+            result="PASS — production-signed N and N+1 APKs built and verified. Artifact is ready for physical-device testing."
+          else
+            result="FAIL — physical upgrade package was not completed. No tag or Release was created."
+          fi
+
+          comment_file="${RUNNER_TEMP}/physical-upgrade-comment.md"
+          cat > "${comment_file}" <<EOF
+          ### Production-signed physical N → N+1 package
+
+          - Result: **${result}**
+          - HEAD: \`${HEAD_SHA}\`
+          - Run: ${RUN_URL}
+          - N: versionCode \`${VERSION_CODE_N}\`
+          - N+1: versionCode \`${VERSION_CODE_N_PLUS_1}\`
+          - Pinned certificate SHA-256: \`${EXPECTED_SIGNER_SHA256}\`
+          - Artifact: \`passwdgen-production-signed-physical-upgrade-pair\` (success only)
+          - Tag or GitHub Release created: **no**
+          EOF
+          gh issue comment 5 --body-file "${comment_file}"
