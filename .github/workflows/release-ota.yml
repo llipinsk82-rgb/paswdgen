@@ -13,6 +13,8 @@ jobs:
     name: Sign and publish OTA release
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    env:
+      EXPECTED_SIGNER_SHA256: "4bbe62f2bad5733fcc1585ed6fe437bedeb181ffb3637a0a067138d2131c90b1"
 
     steps:
       - name: Checkout repository
@@ -76,7 +78,7 @@ jobs:
           set -euo pipefail
           ./gradlew --no-daemon testDebugUnitTest lintRelease assembleRelease
 
-      - name: Verify package and prepare update manifest
+      - name: Verify pinned signer and prepare update manifest
         id: package
         shell: bash
         run: |
@@ -85,12 +87,28 @@ jobs:
           source_apk="app/build/outputs/apk/release/app-release.apk"
           release_dir="${RUNNER_TEMP}/release"
           release_apk="${release_dir}/PasswdGen-release.apk"
+          verification="${RUNNER_TEMP}/release-apksigner-verification.txt"
           mkdir -p "${release_dir}"
           cp "${source_apk}" "${release_apk}"
 
-          "${build_tools}/apksigner" verify --verbose --print-certs "${release_apk}"
+          "${build_tools}/apksigner" verify --verbose --print-certs "${release_apk}" > "${verification}"
+          grep -Fq "Verified using v2 scheme (APK Signature Scheme v2): true" "${verification}"
+
+          package_id="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest application-id "${release_apk}")"
           version_code="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest version-code "${release_apk}")"
           version_name="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest version-name "${release_apk}")"
+          signer_sha256="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "${verification}" | head -n 1 | tr '[:upper:]' '[:lower:]')"
+          expected_sha256="$(printf '%s' "${EXPECTED_SIGNER_SHA256}" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+
+          test "${package_id}" = "com.blackserv.passwdgen"
+          test -n "${signer_sha256}"
+          if [[ "${signer_sha256}" != "${expected_sha256}" ]]; then
+            echo "Release signer certificate mismatch." >&2
+            echo "Expected: ${expected_sha256}" >&2
+            echo "Actual:   ${signer_sha256}" >&2
+            exit 1
+          fi
+
           expected_tag="v${version_name}"
           if [[ "${GITHUB_REF_NAME}" != "${expected_tag}" ]]; then
             echo "Tag ${GITHUB_REF_NAME} does not match app version ${expected_tag}." >&2
@@ -107,6 +125,7 @@ jobs:
             '{versionCode:$versionCode,versionName:$versionName,apkUrl:$apkUrl,sha256:$sha256}' \
             > "${release_dir}/update.json"
 
+          echo "Pinned production signer verified: ${signer_sha256}"
           echo "release_dir=${release_dir}" >> "${GITHUB_OUTPUT}"
           echo "version_name=${version_name}" >> "${GITHUB_OUTPUT}"
 
