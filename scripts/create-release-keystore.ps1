@@ -39,8 +39,44 @@ function Read-ConfirmedPassword {
     }
 }
 
-$keytoolCommand = Get-Command keytool -ErrorAction Stop
-$keytool = $keytoolCommand.Source
+function Find-Keytool {
+    $candidates = @()
+
+    $command = Get-Command keytool.exe -ErrorAction SilentlyContinue
+    if ($command) {
+        $candidates += $command.Source
+    }
+
+    $command = Get-Command keytool -ErrorAction SilentlyContinue
+    if ($command) {
+        $candidates += $command.Source
+    }
+
+    if ($env:JAVA_HOME) {
+        $candidates += (Join-Path $env:JAVA_HOME "bin\keytool.exe")
+        $candidates += (Join-Path $env:JAVA_HOME "bin/keytool")
+    }
+
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+        $candidates += "C:\Program Files\Android\Android Studio\jbr\bin\keytool.exe"
+
+        $adoptiumRoots = Get-ChildItem "C:\Program Files\Eclipse Adoptium" -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending
+        foreach ($root in $adoptiumRoots) {
+            $candidates += (Join-Path $root.FullName "bin\keytool.exe")
+        }
+    }
+
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
+    }
+
+    throw "Nie znaleziono keytool. Zainstaluj JDK 17 albo Android Studio."
+}
+
+$keytool = Find-Keytool
 
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $documents = [Environment]::GetFolderPath([Environment+SpecialFolder]::MyDocuments)
@@ -105,22 +141,12 @@ try {
     & $keytool @exportArgs
     if ($LASTEXITCODE -ne 0) { throw "Nie udalo sie wyeksportowac certyfikatu publicznego." }
 
-    $listArgs = @(
-        "-list",
-        "-v",
-        "-keystore", $keystorePath,
-        "-storetype", "JKS",
-        "-alias", $Alias,
-        "-storepass:env", "PASSWDGEN_SIGNING_PASSWORD"
-    )
-    $keytoolInfo = (& $keytool @listArgs 2>&1 | Out-String)
-    if ($LASTEXITCODE -ne 0) { throw "Nie udalo sie zweryfikowac utworzonego klucza." }
-
     $keystoreBytes = [IO.File]::ReadAllBytes($keystorePath)
     $keystoreBase64 = [Convert]::ToBase64String($keystoreBytes)
     [IO.File]::WriteAllText($base64Path, $keystoreBase64, [Text.Encoding]::ASCII)
 
     $certificateSha256 = (Get-FileHash -Algorithm SHA256 -Path $certificatePath).Hash.ToLowerInvariant()
+    $certificateFingerprint = (($certificateSha256.ToUpperInvariant() -split '(..)' | Where-Object { $_ }) -join ':')
     $keystoreSha256 = (Get-FileHash -Algorithm SHA256 -Path $keystorePath).Hash.ToLowerInvariant()
     $generatedUtc = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
 
@@ -130,17 +156,16 @@ Generated UTC: $generatedUtc
 Application ID: com.blackserv.passwdgen
 Alias: $Alias
 Certificate SHA-256: $certificateSha256
+Certificate fingerprint SHA-256: $certificateFingerprint
 Keystore SHA-256: $keystoreSha256
 Validity days: 36500
-
-$keytoolInfo
 "@
     [IO.File]::WriteAllText($metadataPath, $metadata, [Text.UTF8Encoding]::new($false))
 
     Write-Host ""
     Write-Host "Utworzono docelowy klucz podpisujacy PasswdGen." -ForegroundColor Green
     Write-Host "Katalog: $OutputDirectory"
-    Write-Host "Fingerprint certyfikatu SHA-256: $certificateSha256"
+    Write-Host "Fingerprint certyfikatu SHA-256: $certificateFingerprint"
     Write-Host ""
     Write-Host "Dodaj nastepujace GitHub Actions repository secrets:"
     Write-Host "ANDROID_KEYSTORE_BASE64 = cala zawartosc pliku $base64Path"
