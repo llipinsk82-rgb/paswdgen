@@ -10,6 +10,22 @@ com.blackserv.passwdgen
 
 Nie wolno go zmienić po pierwszym wydaniu produkcyjnym. Każda aktualizacja OTA musi mieć wyższy `versionCode` i być podpisana tym samym certyfikatem.
 
+## Docelowy certyfikat produkcyjny
+
+Docelowy fingerprint SHA-256 certyfikatu podpisującego:
+
+```text
+4B:BE:62:F2:BA:D5:73:3F:CC:15:85:ED:6F:E4:37:BE:DE:B1:81:FF:B3:63:7A:0A:06:71:38:D2:13:1C:90:B1
+```
+
+Wartość znormalizowana używana przez workflowy:
+
+```text
+4bbe62f2bad5733fcc1585ed6fe437bedeb181ffb3637a0a067138d2131c90b1
+```
+
+Fingerprint certyfikatu publicznego nie jest sekretem. Workflow `Android signing preflight` oraz workflow wydania OTA wymagają dokładnie tego certyfikatu i zatrzymają proces przy próbie użycia innego klucza.
+
 ## Zasada bezpieczeństwa
 
 Klucz produkcyjny powstaje wyłącznie lokalnie na zaufanym komputerze. Nie generujemy go w GitHub Actions, nie wysyłamy przez czat i nigdy nie zapisujemy w repozytorium.
@@ -70,6 +86,8 @@ W katalogu wynikowym powstaną:
 - `passwdgen-release-cert.der` — publiczny certyfikat,
 - `release-signing-info.txt` — alias, fingerprint certyfikatu i sumy kontrolne.
 
+Samodzielny generator użyty przy pierwszym utworzeniu klucza może zapisać plik Base64 jako `passwdgen-release-base64.txt` oraz certyfikat jako `passwdgen-release-cert.pem`. Są to równoważne dane dla tego samego JKS; do sekretu `ANDROID_KEYSTORE_BASE64` należy użyć całej jednowierszowej zawartości właściwego pliku Base64.
+
 Pliki JKS i Base64 są objęte regułami `.gitignore`, ale nadal nie należy tworzyć ich wewnątrz repozytorium.
 
 ## Kopie bezpieczeństwa
@@ -77,9 +95,9 @@ Pliki JKS i Base64 są objęte regułami `.gitignore`, ale nadal nie należy two
 Przed dodaniem sekretów:
 
 1. Zapisz hasło w zaufanym menedżerze haseł.
-2. Skopiuj `passwdgen-release.jks` i `release-signing-info.txt` na dwa niezależne, zaszyfrowane nośniki.
+2. Skopiuj `passwdgen-release.jks` i raport fingerprintu na dwa niezależne, zaszyfrowane nośniki.
 3. Co najmniej jeden nośnik przechowuj offline i poza komputerem roboczym.
-4. Porównaj SHA-256 kopii z wartością w `release-signing-info.txt`.
+4. Porównaj SHA-256 kopii JKS z wartością zapisaną w raporcie.
 5. Nie przechowuj hasła i wszystkich kopii klucza w tej samej lokalizacji.
 
 Utrata klucza oznacza utratę możliwości płynnego aktualizowania istniejących instalacji poza mechanizmem rotacji oferowanym przez sklep. Ujawnienie klucza umożliwia podszywanie się pod wydawcę aplikacji.
@@ -96,9 +114,9 @@ Dodaj dokładnie cztery sekrety:
 
 | Nazwa | Wartość |
 |---|---|
-| `ANDROID_KEYSTORE_BASE64` | cała jednowierszowa zawartość `passwdgen-release.jks.base64.txt` |
+| `ANDROID_KEYSTORE_BASE64` | cała jednowierszowa zawartość pliku Base64 wygenerowanego z `passwdgen-release.jks` |
 | `ANDROID_KEYSTORE_PASSWORD` | hasło podane lokalnemu skryptowi |
-| `ANDROID_KEY_ALIAS` | domyślnie `passwdgen-release` |
+| `ANDROID_KEY_ALIAS` | `passwdgen-release` |
 | `ANDROID_KEY_PASSWORD` | to samo hasło |
 
 Nie wklejaj tych wartości do Issue, komentarza PR, logu, pliku `.env`, `gradle.properties` ani `keystore.properties` w repozytorium.
@@ -108,10 +126,10 @@ Nie wklejaj tych wartości do Issue, komentarza PR, logu, pliku `.env`, `gradle.
 1. Otwórz workflow `Android signing preflight`.
 2. Uruchom `Run workflow` dla gałęzi `agent/android-vault-mvp`.
 3. Oczekiwany wynik: `PASS`.
-4. Zachowaj fingerprint certyfikatu SHA-256 z bezpiecznego raportu.
-5. Porównaj go z `release-signing-info.txt`.
+4. Bezpieczny raport musi wskazać signer SHA-256 `4bbe62f2bad5733fcc1585ed6fe437bedeb181ffb3637a0a067138d2131c90b1`.
+5. Każda inna wartość musi zatrzymać proces.
 
-Preflight nie tworzy taga ani GitHub Release i nie publikuje APK. Jeżeli fingerprinty są różne, zatrzymaj proces i nie twórz wydania.
+Preflight nie tworzy taga ani GitHub Release i nie publikuje APK.
 
 ## Pierwsze wydanie
 
