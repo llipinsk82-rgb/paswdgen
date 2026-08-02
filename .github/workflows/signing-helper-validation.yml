@@ -1,0 +1,125 @@
+name: Signing helper validation
+
+on:
+  push:
+    branches:
+      - agent/android-vault-mvp
+    paths:
+      - scripts/create-release-keystore.sh
+      - scripts/create-release-keystore.ps1
+      - docs/RELEASE-SIGNING.md
+      - .gitignore
+      - .github/workflows/signing-helper-validation.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - scripts/create-release-keystore.sh
+      - scripts/create-release-keystore.ps1
+      - docs/RELEASE-SIGNING.md
+      - .gitignore
+      - .github/workflows/signing-helper-validation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signing-helper-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate signing helpers
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Validate Bash syntax
+        shell: bash
+        run: bash -n scripts/create-release-keystore.sh
+
+      - name: Validate PowerShell syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "scripts/create-release-keystore.ps1",
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+
+      - name: Exercise Bash generator with throwaway identity
+        shell: bash
+        env:
+          TEST_SIGNING_PASSWORD: PasswdGen-CI-only-password-2026
+        run: |
+          set -euo pipefail
+          output_dir="${RUNNER_TEMP}/passwdgen-signing-test"
+          printf '%s\n%s\n' \
+            "${TEST_SIGNING_PASSWORD}" \
+            "${TEST_SIGNING_PASSWORD}" \
+            | bash scripts/create-release-keystore.sh "${output_dir}"
+
+          test -s "${output_dir}/passwdgen-release.jks"
+          test -s "${output_dir}/passwdgen-release.jks.base64.txt"
+          test -s "${output_dir}/passwdgen-release-cert.der"
+          test -s "${output_dir}/release-signing-info.txt"
+
+          base64 --decode "${output_dir}/passwdgen-release.jks.base64.txt" \
+            > "${RUNNER_TEMP}/decoded-passwdgen-release.jks"
+          cmp \
+            "${output_dir}/passwdgen-release.jks" \
+            "${RUNNER_TEMP}/decoded-passwdgen-release.jks"
+
+          export PASSWDGEN_SIGNING_PASSWORD="${TEST_SIGNING_PASSWORD}"
+          keytool \
+            -list \
+            -keystore "${output_dir}/passwdgen-release.jks" \
+            -storetype JKS \
+            -alias passwdgen-release \
+            -storepass:env PASSWDGEN_SIGNING_PASSWORD
+
+          grep -Fq "Application ID: com.blackserv.passwdgen" \
+            "${output_dir}/release-signing-info.txt"
+          grep -Eq '^Certificate SHA-256: [0-9a-f]{64}$' \
+            "${output_dir}/release-signing-info.txt"
+
+      - name: Verify documentation and ignore rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'com.blackserv.passwdgen' docs/RELEASE-SIGNING.md
+          grep -Fq 'ANDROID_KEYSTORE_BASE64' docs/RELEASE-SIGNING.md
+          grep -Fq 'ANDROID_KEYSTORE_PASSWORD' docs/RELEASE-SIGNING.md
+          grep -Fq 'ANDROID_KEY_ALIAS' docs/RELEASE-SIGNING.md
+          grep -Fq 'ANDROID_KEY_PASSWORD' docs/RELEASE-SIGNING.md
+          grep -Fxq '*.jks' .gitignore
+          grep -Fxq '*.p12' .gitignore
+          grep -Fxq '*.pfx' .gitignore
+          grep -Fxq '*.jks.base64.txt' .gitignore
+
+      - name: Remove throwaway signing material
+        if: always()
+        shell: bash
+        run: |
+          rm -rf \
+            "${RUNNER_TEMP}/passwdgen-signing-test" \
+            "${RUNNER_TEMP}/decoded-passwdgen-release.jks"
