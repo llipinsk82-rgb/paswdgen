@@ -4,9 +4,29 @@ on:
   push:
     branches:
       - agent/android-vault-mvp
+    paths:
+      - app/**
+      - gradle/**
+      - build.gradle.kts
+      - settings.gradle.kts
+      - gradle.properties
+      - gradlew
+      - gradlew.bat
+      - scripts/emulator-smoke.sh
+      - .github/workflows/android-emulator.yml
   pull_request:
     branches:
       - main
+    paths:
+      - app/**
+      - gradle/**
+      - build.gradle.kts
+      - settings.gradle.kts
+      - gradle.properties
+      - gradlew
+      - gradlew.bat
+      - scripts/emulator-smoke.sh
+      - .github/workflows/android-emulator.yml
   workflow_dispatch:
 
 permissions:
