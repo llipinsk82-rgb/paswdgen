@@ -96,7 +96,7 @@ internal object AutofillDomainPolicy {
     fun matches(savedWebsite: String, requestedDomain: String): Boolean {
         val saved = normalizeHost(savedWebsite) ?: return false
         val requested = normalizeHost(requestedDomain) ?: return false
-        return saved == requested || saved.endsWith(".$requested") || requested.endsWith(".$saved")
+        return saved == requested
     }
 }
 
@@ -137,7 +137,7 @@ internal object AssistStructureParser {
         )
     }
 
-    private inline fun walk(
+    private fun walk(
         node: AssistStructure.ViewNode,
         visit: (AssistStructure.ViewNode) -> Unit,
     ) {
