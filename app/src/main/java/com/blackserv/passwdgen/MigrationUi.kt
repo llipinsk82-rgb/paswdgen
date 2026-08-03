@@ -65,6 +65,9 @@ internal fun VaultMigrationControls(
         if (uri != null) viewModel.exportGoogleCsv(uri)
     }
 
+    AutofillSettingsCard()
+    Spacer(Modifier.height(8.dp))
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(18.dp),
