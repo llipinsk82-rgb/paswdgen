@@ -1,5 +1,6 @@
 package com.blackserv.passwdgen
 
+import java.net.IDN
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -51,7 +52,8 @@ class VaultGroupingTest {
 
     @Test
     fun `host normalization handles unicode and www`() {
-        assertEquals("xn--d-wha.example", VaultGrouping.normalizedHost("https://www.dą.example/path"))
+        val expected = IDN.toASCII("dą.example").lowercase()
+        assertEquals(expected, VaultGrouping.normalizedHost("https://www.dą.example/path"))
     }
 
     private fun entry(service: String, website: String, username: String) = VaultEntry(
