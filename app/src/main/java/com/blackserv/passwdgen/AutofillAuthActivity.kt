@@ -4,6 +4,9 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.Parcelable
+import android.service.autofill.Dataset
+import android.service.autofill.FillResponse
 import android.view.WindowManager
 import android.view.autofill.AutofillId
 import android.view.autofill.AutofillManager
@@ -14,8 +17,6 @@ import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
-import android.service.autofill.Dataset
-import android.service.autofill.FillResponse
 import java.util.concurrent.Executors
 
 class AutofillAuthActivity : FragmentActivity() {
@@ -140,12 +141,12 @@ class AutofillAuthActivity : FragmentActivity() {
         return response.build()
     }
 
-    private fun <T> parcelableExtra(name: String, type: Class<T>): T? {
+    private fun <T : Parcelable> parcelableExtra(name: String, type: Class<T>): T? {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             intent.getParcelableExtra(name, type)
         } else {
-            @Suppress("DEPRECATION")
-            intent.getParcelableExtra(name) as? T
+            @Suppress("DEPRECATION", "UNCHECKED_CAST")
+            intent.getParcelableExtra<Parcelable>(name) as? T
         }
     }
 
