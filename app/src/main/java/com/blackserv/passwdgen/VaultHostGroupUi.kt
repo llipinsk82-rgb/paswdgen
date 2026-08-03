@@ -159,9 +159,10 @@ private fun VaultAccountRow(
             }
             SmallAction(Icons.Outlined.ContentCopy, "Kopiuj login", onCopyLogin)
             SmallAction(
-                if (revealed) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
-                if (revealed) "Ukryj hasło" else "Pokaż hasło",
-            ) { onRevealChange(!revealed) }
+                icon = if (revealed) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                description = if (revealed) "Ukryj hasło" else "Pokaż hasło",
+                onClick = { onRevealChange(!revealed) },
+            )
             SmallAction(Icons.Outlined.ContentCopy, "Kopiuj hasło", onCopyPassword)
             SmallAction(Icons.Outlined.Edit, "Edytuj konto", onEdit)
             SmallAction(Icons.Outlined.DeleteOutline, "Usuń konto", onDelete, danger = true)
