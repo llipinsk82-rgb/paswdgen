@@ -15,6 +15,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 internal data class AppUpdate(
     val versionCode: Long,
@@ -33,37 +34,96 @@ internal object GitHubUpdater {
     private const val LAST_CHECK = "last_check"
 
     private val executor = Executors.newSingleThreadExecutor()
+    private val checkInProgress = AtomicBoolean(false)
 
     fun checkOnLaunch(activity: Activity) {
         val preferences = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
         if (now - preferences.getLong(LAST_CHECK, 0L) < CHECK_INTERVAL_MS) return
-        preferences.edit().putLong(LAST_CHECK, now).apply()
+
+        checkForUpdate(
+            activity = activity,
+            interactive = false,
+            onSuccessfulCheck = {
+                preferences.edit().putLong(LAST_CHECK, System.currentTimeMillis()).apply()
+            },
+        )
+    }
+
+    fun checkNow(activity: Activity) {
+        Toast.makeText(activity, "Sprawdzanie aktualizacji…", Toast.LENGTH_SHORT).show()
+        checkForUpdate(activity = activity, interactive = true)
+    }
+
+    private fun checkForUpdate(
+        activity: Activity,
+        interactive: Boolean,
+        onSuccessfulCheck: (() -> Unit)? = null,
+    ) {
+        if (!checkInProgress.compareAndSet(false, true)) {
+            if (interactive) {
+                Toast.makeText(activity, "Sprawdzanie aktualizacji już trwa.", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
 
         executor.execute {
-            val update = runCatching { fetchLatestUpdate(activity) }.getOrNull() ?: return@execute
+            val result = runCatching { fetchLatestUpdate(activity) }
+            if (result.isSuccess) onSuccessfulCheck?.invoke()
+            checkInProgress.set(false)
+
             activity.runOnUiThread {
                 if (activity.isFinishing || activity.isDestroyed) return@runOnUiThread
-                AlertDialog.Builder(activity)
-                    .setTitle("Dostępna aktualizacja ${update.versionName}")
-                    .setMessage(
-                        update.releaseNotes.ifBlank {
-                            "Nowa wersja PasswdGen jest gotowa do pobrania z GitHub Releases."
-                        },
-                    )
-                    .setNegativeButton("Później", null)
-                    .setPositiveButton("Aktualizuj") { _, _ ->
-                        activity.startActivity(
-                            Intent(activity, UpdateActivity::class.java)
-                                .putExtra(UpdateActivity.EXTRA_VERSION_CODE, update.versionCode)
-                                .putExtra(UpdateActivity.EXTRA_VERSION_NAME, update.versionName)
-                                .putExtra(UpdateActivity.EXTRA_APK_URL, update.apkUrl)
-                                .putExtra(UpdateActivity.EXTRA_SHA256, update.sha256),
-                        )
-                    }
-                    .show()
+                result.fold(
+                    onSuccess = { update ->
+                        if (update == null) {
+                            if (interactive) {
+                                Toast.makeText(
+                                    activity,
+                                    "Masz najnowszą wersję PasswdGen.",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                        } else {
+                            showUpdateDialog(activity, update)
+                        }
+                    },
+                    onFailure = { error ->
+                        if (interactive) {
+                            AlertDialog.Builder(activity)
+                                .setTitle("Nie udało się sprawdzić aktualizacji")
+                                .setMessage(
+                                    error.message
+                                        ?: "Sprawdź połączenie z internetem i spróbuj ponownie.",
+                                )
+                                .setPositiveButton("OK", null)
+                                .show()
+                        }
+                    },
+                )
             }
         }
+    }
+
+    private fun showUpdateDialog(activity: Activity, update: AppUpdate) {
+        AlertDialog.Builder(activity)
+            .setTitle("Dostępna aktualizacja ${update.versionName}")
+            .setMessage(
+                update.releaseNotes.ifBlank {
+                    "Nowa wersja PasswdGen jest gotowa do pobrania z GitHub Releases."
+                },
+            )
+            .setNegativeButton("Później", null)
+            .setPositiveButton("Aktualizuj") { _, _ ->
+                activity.startActivity(
+                    Intent(activity, UpdateActivity::class.java)
+                        .putExtra(UpdateActivity.EXTRA_VERSION_CODE, update.versionCode)
+                        .putExtra(UpdateActivity.EXTRA_VERSION_NAME, update.versionName)
+                        .putExtra(UpdateActivity.EXTRA_APK_URL, update.apkUrl)
+                        .putExtra(UpdateActivity.EXTRA_SHA256, update.sha256),
+                )
+            }
+            .show()
     }
 
     private fun fetchLatestUpdate(context: Context): AppUpdate? {
