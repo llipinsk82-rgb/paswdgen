@@ -1,7 +1,5 @@
 package com.blackserv.passwdgen
 
-import java.net.IDN
-import java.net.URI
 import java.util.Locale
 
 internal data class VaultHostGroup(
@@ -32,21 +30,7 @@ internal object VaultGrouping {
                 .thenBy(VaultHostGroup::key),
         )
 
-    internal fun normalizedHost(value: String?): String? {
-        if (value.isNullOrBlank()) return null
-        val raw = value.trim()
-        val host = runCatching {
-            val candidate = if ("://" in raw) raw else "https://$raw"
-            URI(candidate).host
-        }.getOrNull() ?: raw.substringBefore('/').substringBefore(':')
-
-        return runCatching {
-            IDN.toASCII(host.trim().trim('.'))
-                .lowercase(Locale.ROOT)
-                .removePrefix("www.")
-                .takeIf { it.isNotBlank() }
-        }.getOrNull()
-    }
+    internal fun normalizedHost(value: String?): String? = HostNormalizer.normalize(value)
 
     private fun groupKey(entry: VaultEntry): String {
         normalizedHost(entry.website)?.let { return "host:$it" }
