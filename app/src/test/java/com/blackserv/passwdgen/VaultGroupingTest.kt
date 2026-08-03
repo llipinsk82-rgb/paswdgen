@@ -51,7 +51,7 @@ class VaultGroupingTest {
 
     @Test
     fun `host normalization handles unicode and www`() {
-        assertEquals("xn--d-uga.example", VaultGrouping.normalizedHost("https://www.dą.example/path"))
+        assertEquals("xn--d-wha.example", VaultGrouping.normalizedHost("https://www.dą.example/path"))
     }
 
     private fun entry(service: String, website: String, username: String) = VaultEntry(
