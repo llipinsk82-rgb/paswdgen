@@ -63,7 +63,7 @@ internal fun AutofillSettingsCard() {
                     }
                     runCatching { context.startActivity(request) }
                         .onFailure {
-                            context.startActivity(Intent(Settings.ACTION_AUTOFILL_SETTINGS))
+                            context.startActivity(Intent(Settings.ACTION_SETTINGS))
                         }
                 },
                 modifier = Modifier.fillMaxWidth().height(44.dp),
