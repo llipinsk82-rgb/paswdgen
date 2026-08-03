@@ -167,7 +167,7 @@ private fun VaultScreen(
     var editing by remember { mutableStateOf<VaultEntry?>(null) }
     var creating by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<VaultEntry?>(null) }
-    val expanded = remember { mutableStateMapOf<String, Boolean>() }
+    val expandedGroups = remember { mutableStateMapOf<String, Boolean>() }
     val revealed = remember { mutableStateMapOf<String, Boolean>() }
     val filtered = remember(state.entries, state.searchQuery) {
         val query = state.searchQuery.trim().lowercase()
@@ -182,6 +182,8 @@ private fun VaultScreen(
             }
         }
     }
+    val grouped = remember(filtered) { VaultGrouping.group(filtered) }
+    val totalGroupCount = remember(state.entries) { VaultGrouping.group(state.entries).size }
 
     Column(
         modifier = modifier
@@ -198,14 +200,14 @@ private fun VaultScreen(
             VaultTab.ENTRIES -> {
                 PremiumVaultToolbar(
                     query = state.searchQuery,
-                    visibleCount = filtered.size,
-                    totalCount = state.entries.size,
+                    visibleCount = grouped.size,
+                    totalCount = totalGroupCount,
                     onSearchChange = onSearchChange,
                     onAdd = { creating = true },
                 )
                 Spacer(Modifier.height(8.dp))
 
-                if (filtered.isEmpty()) {
+                if (grouped.isEmpty()) {
                     Box(
                         modifier = Modifier.fillMaxWidth().weight(1f),
                         contentAlignment = Alignment.Center,
@@ -220,23 +222,27 @@ private fun VaultScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth().weight(1f),
                     ) {
-                        items(filtered, key = VaultEntry::id) { entry ->
-                            PremiumVaultRow(
-                                entry = entry,
-                                expanded = expanded[entry.id] == true,
-                                revealed = revealed[entry.id] == true,
-                                onToggleExpanded = { expanded[entry.id] = expanded[entry.id] != true },
-                                onRevealChange = { isRevealed -> revealed[entry.id] = isRevealed },
-                                onCopyLogin = {
+                        items(grouped, key = VaultHostGroup::key) { group ->
+                            PremiumVaultHostGroup(
+                                group = group,
+                                expanded = expandedGroups[group.key] == true,
+                                isRevealed = { entryId -> revealed[entryId] == true },
+                                onToggleExpanded = {
+                                    expandedGroups[group.key] = expandedGroups[group.key] != true
+                                },
+                                onRevealChange = { entryId, isRevealed ->
+                                    revealed[entryId] = isRevealed
+                                },
+                                onCopyLogin = { entry ->
                                     copySensitive(context, entry.username)
                                     onMessage("Login skopiowany. Schowek wyczyści się po 60 sekundach.")
                                 },
-                                onCopyPassword = {
+                                onCopyPassword = { entry ->
                                     copySensitive(context, entry.password)
                                     onMessage("Hasło skopiowane. Schowek wyczyści się po 60 sekundach.")
                                 },
-                                onEdit = { editing = entry },
-                                onDelete = { deleting = entry },
+                                onEdit = { entry -> editing = entry },
+                                onDelete = { entry -> deleting = entry },
                             )
                         }
                         item { Spacer(Modifier.height(14.dp)) }
