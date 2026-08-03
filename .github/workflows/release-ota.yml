@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - "v*"
+    branches:
+      - "release/v*"
 
 permissions:
   contents: write
@@ -111,14 +113,22 @@ jobs:
           test "${package_id}" = "com.blackserv.passwdgen"
           test "${signer_sha256}" = "${expected_sha256}"
 
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            release_tag="${GITHUB_REF_NAME}"
+            release_mode="existing-tag"
+          else
+            release_tag="${GITHUB_REF_NAME#release/}"
+            release_mode="create-tag"
+          fi
+
           expected_tag="v${version_name}"
-          if [[ "${GITHUB_REF_NAME}" != "${expected_tag}" ]]; then
-            echo "Tag ${GITHUB_REF_NAME} does not match app version ${expected_tag}." >&2
+          if [[ "${release_tag}" != "${expected_tag}" ]]; then
+            echo "Release ref ${release_tag} does not match app version ${expected_tag}." >&2
             exit 1
           fi
 
           apk_sha256="$(sha256sum "${release_apk}" | awk '{print $1}')"
-          apk_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/PasswdGen-release.apk"
+          apk_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${release_tag}/PasswdGen-release.apk"
           jq -n \
             --argjson versionCode "${version_code}" \
             --arg versionName "${version_name}" \
@@ -131,6 +141,8 @@ jobs:
           echo "APK Signature Scheme v3 verified."
           echo "release_dir=${release_dir}" >> "${GITHUB_OUTPUT}"
           echo "version_name=${version_name}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+          echo "release_mode=${release_mode}" >> "${GITHUB_OUTPUT}"
 
       - name: Publish GitHub Release
         shell: bash
@@ -138,14 +150,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_DIR: ${{ steps.package.outputs.release_dir }}
           VERSION_NAME: ${{ steps.package.outputs.version_name }}
+          RELEASE_TAG: ${{ steps.package.outputs.release_tag }}
+          RELEASE_MODE: ${{ steps.package.outputs.release_mode }}
         run: |
           set -euo pipefail
-          gh release create "${GITHUB_REF_NAME}" \
-            "${RELEASE_DIR}/PasswdGen-release.apk" \
-            "${RELEASE_DIR}/update.json" \
-            --title "PasswdGen ${VERSION_NAME}" \
-            --generate-notes \
-            --verify-tag
+          if [[ "${RELEASE_MODE}" == "existing-tag" ]]; then
+            gh release create "${RELEASE_TAG}" \
+              "${RELEASE_DIR}/PasswdGen-release.apk" \
+              "${RELEASE_DIR}/update.json" \
+              --title "PasswdGen ${VERSION_NAME}" \
+              --generate-notes \
+              --verify-tag
+          else
+            gh release create "${RELEASE_TAG}" \
+              "${RELEASE_DIR}/PasswdGen-release.apk" \
+              "${RELEASE_DIR}/update.json" \
+              --title "PasswdGen ${VERSION_NAME}" \
+              --generate-notes \
+              --target "${GITHUB_SHA}"
+          fi
 
       - name: Remove signing material
         if: always()
