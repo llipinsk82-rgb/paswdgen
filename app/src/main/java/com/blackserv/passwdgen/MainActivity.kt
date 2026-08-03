@@ -8,6 +8,17 @@ import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.SystemUpdate
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.fragment.app.FragmentActivity
@@ -37,12 +48,29 @@ class MainActivity : FragmentActivity() {
 
         setContent {
             PasswdGenTheme {
-                PasswdGenApp(
-                    viewModel = viewModel,
-                    onUnlockRequest = ::requestVaultUnlock,
-                    onSensitiveActionRequest = ::requestSensitiveAction,
-                    onExternalFlowChanged = ::setExternalFlowActive,
-                )
+                Box {
+                    PasswdGenApp(
+                        viewModel = viewModel,
+                        onUnlockRequest = ::requestVaultUnlock,
+                        onSensitiveActionRequest = ::requestSensitiveAction,
+                        onExternalFlowChanged = ::setExternalFlowActive,
+                    )
+                    IconButton(
+                        onClick = { GitHubUpdater.checkNow(this@MainActivity) },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .statusBarsPadding()
+                            .padding(top = 12.dp, end = 16.dp)
+                            .size(38.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.SystemUpdate,
+                            contentDescription = "Sprawdź aktualizacje",
+                            tint = PgCyan,
+                            modifier = Modifier.size(21.dp),
+                        )
+                    }
+                }
             }
         }
 
