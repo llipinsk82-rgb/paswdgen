@@ -31,6 +31,26 @@
                 android:resource="@xml/update_file_paths" />
         </provider>
 
+        <service
+            android:name=".PasswdGenAutofillService"
+            android:exported="true"
+            android:label="@string/autofill_service_label"
+            android:permission="android.permission.BIND_AUTOFILL_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.autofill.AutofillService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.autofill"
+                android:resource="@xml/autofill_service" />
+        </service>
+
+        <activity
+            android:name=".AutofillAuthActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:theme="@style/Theme.PasswdGen" />
+
         <activity
             android:name=".UpdateActivity"
             android:excludeFromRecents="true"
