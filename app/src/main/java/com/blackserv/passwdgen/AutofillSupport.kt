@@ -3,8 +3,6 @@ package com.blackserv.passwdgen
 import android.app.assist.AssistStructure
 import android.text.InputType
 import android.view.autofill.AutofillId
-import java.net.IDN
-import java.net.URI
 import java.util.Locale
 
 internal enum class AutofillFieldKind {
@@ -77,21 +75,8 @@ internal object AutofillFieldPolicy {
 }
 
 internal object AutofillDomainPolicy {
-    fun normalizeHost(value: String?): String? {
-        if (value.isNullOrBlank()) return null
-        val raw = value.trim()
-        val host = runCatching {
-            val candidate = if ("://" in raw) raw else "https://$raw"
-            URI(candidate).host
-        }.getOrNull() ?: raw.substringBefore('/').substringBefore(':')
-
-        return runCatching {
-            IDN.toASCII(host.trim().trim('.'))
-                .lowercase(Locale.ROOT)
-                .removePrefix("www.")
-                .takeIf { it.isNotBlank() && '.' in it }
-        }.getOrNull()
-    }
+    fun normalizeHost(value: String?): String? =
+        HostNormalizer.normalize(value, requirePublicStyleHost = true)
 
     fun matches(savedWebsite: String, requestedDomain: String): Boolean {
         val saved = normalizeHost(savedWebsite) ?: return false
