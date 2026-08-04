@@ -45,4 +45,32 @@ class AutofillPolicyTest {
         assertFalse(AutofillDomainPolicy.matches("example.com", "evil-example.com"))
         assertFalse(AutofillDomainPolicy.matches("example.com", "sub.example.com"))
     }
+
+    @Test
+    fun `native app binding requires exact package and signer set`() {
+        val signer = "a".repeat(64)
+        val binding = AndroidAppBinding(
+            packageName = "com.example.shop",
+            signerSha256 = signer,
+        )
+
+        assertTrue(
+            NativeAppBindingPolicy.matches(
+                binding,
+                NativeAppIdentity("com.example.shop", "Example Shop", signer),
+            ),
+        )
+        assertFalse(
+            NativeAppBindingPolicy.matches(
+                binding,
+                NativeAppIdentity("com.example.shop", "Example Shop", "b".repeat(64)),
+            ),
+        )
+        assertFalse(
+            NativeAppBindingPolicy.matches(
+                binding,
+                NativeAppIdentity("com.example.fake", "Fake Shop", signer),
+            ),
+        )
+    }
 }
