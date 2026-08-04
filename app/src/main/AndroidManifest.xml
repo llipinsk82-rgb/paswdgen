@@ -49,7 +49,7 @@
             android:excludeFromRecents="true"
             android:exported="false"
             android:noHistory="true"
-            android:theme="@style/Theme.PasswdGen" />
+            android:theme="@style/Theme.PasswdGen.Autofill" />
 
         <activity
             android:name=".UpdateActivity"
