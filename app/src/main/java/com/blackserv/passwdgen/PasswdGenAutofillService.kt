@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.os.CancellationSignal
 import android.service.autofill.AutofillService
+import android.service.autofill.Dataset
 import android.service.autofill.FillCallback
 import android.service.autofill.FillRequest
 import android.service.autofill.FillResponse
@@ -26,7 +27,7 @@ class PasswdGenAutofillService : AutofillService() {
         val structure = request.fillContexts.lastOrNull()?.structure
         val form = structure?.let(AssistStructureParser::parse)
         val domain = form?.webDomain
-        val ids = listOfNotNull(form?.usernameId, form?.passwordId).distinct().toTypedArray()
+        val ids = listOfNotNull(form?.usernameId, form?.passwordId).distinct()
 
         // Pierwsza bezpieczna wersja obsługuje formularze WWW z domeną przekazaną przez Androida.
         // Dla natywnych aplikacji potrzebne będzie jawne, przetestowane mapowanie pakiet -> domena.
@@ -46,13 +47,20 @@ class PasswdGenAutofillService : AutofillService() {
             authenticationIntent,
             PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_MUTABLE,
         )
-        val presentation = RemoteViews(packageName, android.R.layout.simple_list_item_1).apply {
-            setTextViewText(android.R.id.text1, "Odblokuj PasswdGen · $domain")
+        val presentation = RemoteViews(packageName, R.layout.autofill_presentation).apply {
+            setTextViewText(R.id.autofill_primary, "Odblokuj PasswdGen")
+            setTextViewText(R.id.autofill_secondary, domain)
         }
+
+        val lockedDataset = Dataset.Builder(presentation).apply {
+            form.usernameId?.let { setValue(it, null, presentation) }
+            form.passwordId?.let { setValue(it, null, presentation) }
+            setAuthentication(pendingIntent.intentSender)
+        }.build()
 
         callback.onSuccess(
             FillResponse.Builder()
-                .setAuthentication(ids, pendingIntent.intentSender, presentation)
+                .addDataset(lockedDataset)
                 .build(),
         )
     }
