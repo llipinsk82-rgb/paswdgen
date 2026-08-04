@@ -6,13 +6,20 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import org.json.JSONArray
 import org.json.JSONObject
 import java.security.KeyStore
+import java.util.Locale
 import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+
+internal data class AndroidAppBinding(
+    val packageName: String,
+    val signerSha256: String,
+)
 
 internal data class VaultEntry(
     val id: String = UUID.randomUUID().toString(),
@@ -21,6 +28,7 @@ internal data class VaultEntry(
     val username: String,
     val password: String,
     val notes: String = "",
+    val androidApps: List<AndroidAppBinding> = emptyList(),
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
 )
@@ -225,12 +233,25 @@ internal class VaultRepository(context: Context) {
         require(entry.username.isNotBlank()) { "Login jest wymagany." }
         require(entry.password.isNotBlank()) { "Hasło jest wymagane." }
         require(entry.createdAt > 0L && updatedAt >= entry.createdAt) { "Nieprawidłowe daty wpisu." }
+        require(entry.androidApps.size <= MAX_APP_BINDINGS) { "Wpis ma zbyt wiele powiązanych aplikacji." }
+
+        val normalizedBindings = entry.androidApps.map { binding ->
+            val packageName = binding.packageName.trim().lowercase(Locale.ROOT)
+            val signer = binding.signerSha256
+                .trim()
+                .lowercase(Locale.ROOT)
+                .replace(":", "")
+            require(PACKAGE_NAME.matches(packageName)) { "Nieprawidłowa nazwa pakietu aplikacji." }
+            require(SIGNER_SET.matches(signer)) { "Nieprawidłowy certyfikat aplikacji." }
+            AndroidAppBinding(packageName, signer)
+        }.distinct().sortedWith(compareBy(AndroidAppBinding::packageName, AndroidAppBinding::signerSha256))
 
         return entry.copy(
             service = entry.service.trim(),
             website = entry.website.trim(),
             username = entry.username.trim(),
             notes = entry.notes.trim(),
+            androidApps = normalizedBindings,
             updatedAt = updatedAt,
         )
     }
@@ -253,6 +274,18 @@ internal class VaultRepository(context: Context) {
         .put("username", entry.username)
         .put("password", entry.password)
         .put("notes", entry.notes)
+        .put(
+            "androidApps",
+            JSONArray().apply {
+                entry.androidApps.forEach { binding ->
+                    put(
+                        JSONObject()
+                            .put("packageName", binding.packageName)
+                            .put("signerSha256", binding.signerSha256),
+                    )
+                }
+            },
+        )
         .toString()
 
     private fun decode(record: EncryptedRecord, json: String): VaultEntry {
@@ -264,8 +297,31 @@ internal class VaultRepository(context: Context) {
             username = value.getString("username"),
             password = value.getString("password"),
             notes = value.optString("notes"),
+            androidApps = decodeBindings(value.optJSONArray("androidApps")),
             createdAt = record.createdAt,
             updatedAt = record.updatedAt,
         )
+    }
+
+    private fun decodeBindings(values: JSONArray?): List<AndroidAppBinding> {
+        if (values == null) return emptyList()
+        require(values.length() <= MAX_APP_BINDINGS) { "Wpis ma zbyt wiele powiązanych aplikacji." }
+        return buildList(values.length()) {
+            repeat(values.length()) { index ->
+                val item = values.getJSONObject(index)
+                add(
+                    AndroidAppBinding(
+                        packageName = item.getString("packageName"),
+                        signerSha256 = item.getString("signerSha256"),
+                    ),
+                )
+            }
+        }
+    }
+
+    private companion object {
+        const val MAX_APP_BINDINGS = 32
+        val PACKAGE_NAME = Regex("^[a-z][a-z0-9_]*(\\.[a-z0-9_]+)+$")
+        val SIGNER_SET = Regex("^[0-9a-f]{64}(,[0-9a-f]{64})*$")
     }
 }
