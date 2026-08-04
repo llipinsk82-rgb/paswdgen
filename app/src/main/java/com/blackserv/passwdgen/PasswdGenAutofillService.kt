@@ -26,12 +26,8 @@ class PasswdGenAutofillService : AutofillService() {
 
         val structure = request.fillContexts.lastOrNull()?.structure
         val form = structure?.let(AssistStructureParser::parse)
-        val domain = form?.webDomain
         val ids = listOfNotNull(form?.usernameId, form?.passwordId).distinct()
-
-        // Pierwsza bezpieczna wersja obsługuje formularze WWW z domeną przekazaną przez Androida.
-        // Dla natywnych aplikacji potrzebne będzie jawne, przetestowane mapowanie pakiet -> domena.
-        if (form == null || domain == null || ids.isEmpty()) {
+        if (form == null || ids.isEmpty()) {
             callback.onSuccess(null)
             return
         }
@@ -39,8 +35,29 @@ class PasswdGenAutofillService : AutofillService() {
         val authenticationIntent = Intent(this, AutofillAuthActivity::class.java).apply {
             putExtra(AutofillAuthActivity.EXTRA_USERNAME_ID, form.usernameId)
             putExtra(AutofillAuthActivity.EXTRA_PASSWORD_ID, form.passwordId)
-            putExtra(AutofillAuthActivity.EXTRA_WEB_DOMAIN, domain)
         }
+
+        val targetLabel: String
+        val targetDetail: String
+        val domain = form.webDomain
+        if (domain != null) {
+            authenticationIntent.putExtra(AutofillAuthActivity.EXTRA_WEB_DOMAIN, domain)
+            targetLabel = "Odblokuj PasswdGen"
+            targetDetail = domain
+        } else {
+            val identity = NativeAppIdentityResolver.resolve(this, form.packageName)
+            if (identity == null) {
+                callback.onSuccess(null)
+                return
+            }
+            authenticationIntent.putExtra(
+                AutofillAuthActivity.EXTRA_NATIVE_PACKAGE,
+                identity.packageName,
+            )
+            targetLabel = "Odblokuj PasswdGen"
+            targetDetail = identity.appLabel
+        }
+
         val pendingIntent = PendingIntent.getActivity(
             this,
             REQUEST_CODE.incrementAndGet(),
@@ -48,8 +65,8 @@ class PasswdGenAutofillService : AutofillService() {
             PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_MUTABLE,
         )
         val presentation = RemoteViews(packageName, R.layout.autofill_presentation).apply {
-            setTextViewText(R.id.autofill_primary, "Odblokuj PasswdGen")
-            setTextViewText(R.id.autofill_secondary, domain)
+            setTextViewText(R.id.autofill_primary, targetLabel)
+            setTextViewText(R.id.autofill_secondary, targetDetail)
         }
 
         val lockedDataset = Dataset.Builder(presentation).apply {
@@ -66,7 +83,8 @@ class PasswdGenAutofillService : AutofillService() {
     }
 
     override fun onSaveRequest(request: SaveRequest, callback: SaveCallback) {
-        // Zapisywanie nowych haseł przez system włączymy po fizycznym teście bezpiecznego wypełniania.
+        // Zapisywanie nowych haseł przez system zostanie włączone po fizycznym teście
+        // bezpiecznego wypełniania w aplikacjach natywnych.
         callback.onSuccess()
     }
 
