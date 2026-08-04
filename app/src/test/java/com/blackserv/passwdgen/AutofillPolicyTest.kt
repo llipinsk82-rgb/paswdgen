@@ -39,6 +39,40 @@ class AutofillPolicyTest {
     }
 
     @Test
+    fun `classifies accessibility and safe html metadata`() {
+        assertEquals(
+            AutofillFieldKind.USERNAME,
+            AutofillFieldPolicy.classify(
+                autofillHints = null,
+                inputType = 0,
+                idEntry = null,
+                hintText = null,
+                contentDescription = "Email address",
+            ),
+        )
+        assertEquals(
+            AutofillFieldKind.PASSWORD,
+            AutofillFieldPolicy.classify(
+                autofillHints = null,
+                inputType = 0,
+                idEntry = null,
+                hintText = null,
+                additionalDescriptors = listOf("placeholder Password", "name accountPassword"),
+            ),
+        )
+        assertNull(
+            AutofillFieldPolicy.classify(
+                autofillHints = null,
+                inputType = InputType.TYPE_CLASS_TEXT,
+                idEntry = null,
+                hintText = null,
+                contentDescription = "Search parking locations",
+                additionalDescriptors = listOf("placeholder Search"),
+            ),
+        )
+    }
+
+    @Test
     fun `autofill only matches exact normalized host`() {
         assertTrue(AutofillDomainPolicy.matches("https://www.example.com/login", "example.com"))
         assertFalse(AutofillDomainPolicy.matches("login.example.com", "example.com"))
