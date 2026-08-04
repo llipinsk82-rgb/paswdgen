@@ -21,6 +21,22 @@ internal data class AutofillForm(
         get() = webDomain ?: packageName
 }
 
+internal data class AutofillParseStats(
+    val packageName: String,
+    val windowCount: Int,
+    val nodeCount: Int,
+    val autofillIdCount: Int,
+    val textCandidateCount: Int,
+    val usernameDetected: Boolean,
+    val passwordDetected: Boolean,
+    val webDomainDetected: Boolean,
+)
+
+internal data class AutofillParseResult(
+    val form: AutofillForm?,
+    val stats: AutofillParseStats,
+)
+
 internal object AutofillFieldPolicy {
     private val passwordHints = setOf(
         "password",
@@ -115,7 +131,9 @@ internal object AssistStructureParser {
         "aria-label",
     )
 
-    fun parse(structure: AssistStructure): AutofillForm? {
+    fun parse(structure: AssistStructure): AutofillForm? = analyze(structure).form
+
+    fun analyze(structure: AssistStructure): AutofillParseResult {
         var usernameId: AutofillId? = null
         var passwordId: AutofillId? = null
         var webDomain: String? = null
@@ -124,15 +142,20 @@ internal object AssistStructureParser {
             ?.trim()
             ?.takeIf(String::isNotBlank)
 
-        val genericTextFields = mutableListOf<AutofillId>()
+        var nodeCount = 0
+        var autofillIdCount = 0
+        val genericTextFields = linkedSetOf<AutofillId>()
 
         for (windowIndex in 0 until structure.windowNodeCount) {
             val root = structure.getWindowNodeAt(windowIndex).rootViewNode
             packageName = packageName ?: root.idPackage?.trim()?.takeIf(String::isNotBlank)
             walk(root) { node ->
+                nodeCount += 1
                 packageName = packageName ?: node.idPackage?.trim()?.takeIf(String::isNotBlank)
                 webDomain = webDomain ?: AutofillDomainPolicy.normalizeHost(node.webDomain)
                 val id = node.autofillId ?: return@walk
+                autofillIdCount += 1
+
                 val htmlDescriptors = node.htmlInfo
                     ?.attributes
                     .orEmpty()
@@ -157,25 +180,40 @@ internal object AssistStructureParser {
                         val isTextCandidate = node.autofillType == View.AUTOFILL_TYPE_TEXT ||
                             inputClass == InputType.TYPE_CLASS_TEXT ||
                             inputClass == InputType.TYPE_CLASS_NUMBER
-                        if (isTextCandidate && id !in genericTextFields) genericTextFields += id
+                        if (isTextCandidate) genericTextFields += id
                     }
                 }
             }
         }
 
-        // Część natywnych aplikacji oznacza tylko pole hasła. W takim przypadku najbliższe
-        // pojedyncze pole tekstowe może bezpiecznie pełnić rolę loginu, ale nie zgadujemy,
-        // gdy kandydatów jest więcej.
         if (passwordId != null && usernameId == null && genericTextFields.size == 1) {
             usernameId = genericTextFields.single()
         }
 
-        if (usernameId == null && passwordId == null) return null
-        return AutofillForm(
-            usernameId = usernameId,
-            passwordId = passwordId,
-            webDomain = webDomain,
-            packageName = packageName.orEmpty(),
+        val resolvedPackage = packageName.orEmpty()
+        val form = if (usernameId == null && passwordId == null) {
+            null
+        } else {
+            AutofillForm(
+                usernameId = usernameId,
+                passwordId = passwordId,
+                webDomain = webDomain,
+                packageName = resolvedPackage,
+            )
+        }
+
+        return AutofillParseResult(
+            form = form,
+            stats = AutofillParseStats(
+                packageName = resolvedPackage,
+                windowCount = structure.windowNodeCount,
+                nodeCount = nodeCount,
+                autofillIdCount = autofillIdCount,
+                textCandidateCount = genericTextFields.size,
+                usernameDetected = usernameId != null,
+                passwordDetected = passwordId != null,
+                webDomainDetected = webDomain != null,
+            ),
         )
     }
 
