@@ -7,4 +7,14 @@
         <item name="android:navigationBarColor">@android:color/black</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
     </style>
+
+    <style name="Theme.PasswdGen.Autofill" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowBackground">#FF060E17</item>
+        <item name="android:colorAccent">#FF22D3EE</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#FF060E17</item>
+        <item name="android:navigationBarColor">@android:color/black</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
 </resources>
