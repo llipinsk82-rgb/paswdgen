@@ -25,9 +25,17 @@ class PasswdGenAutofillService : AutofillService() {
         }
 
         val structure = request.fillContexts.lastOrNull()?.structure
-        val form = structure?.let(AssistStructureParser::parse)
+        if (structure == null) {
+            saveEmptyDiagnostic("Android nie przekazał struktury formularza")
+            callback.onSuccess(null)
+            return
+        }
+
+        val analysis = AssistStructureParser.analyze(structure)
+        val form = analysis.form
         val ids = listOfNotNull(form?.usernameId, form?.passwordId).distinct()
         if (form == null || ids.isEmpty()) {
+            saveDiagnostic(analysis.stats, "Brak rozpoznanych pól loginu lub hasła")
             callback.onSuccess(null)
             return
         }
@@ -44,9 +52,11 @@ class PasswdGenAutofillService : AutofillService() {
             authenticationIntent.putExtra(AutofillAuthActivity.EXTRA_WEB_DOMAIN, domain)
             targetLabel = "Odblokuj PasswdGen"
             targetDetail = domain
+            saveDiagnostic(analysis.stats, "Gotowe: formularz WWW")
         } else {
             val identity = NativeAppIdentityResolver.resolve(this, form.packageName)
             if (identity == null) {
+                saveDiagnostic(analysis.stats, "Nie udało się zweryfikować aplikacji")
                 callback.onSuccess(null)
                 return
             }
@@ -56,6 +66,7 @@ class PasswdGenAutofillService : AutofillService() {
             )
             targetLabel = "Odblokuj PasswdGen"
             targetDetail = identity.appLabel
+            saveDiagnostic(analysis.stats, "Gotowe: aplikacja natywna")
         }
 
         val pendingIntent = PendingIntent.getActivity(
@@ -86,6 +97,42 @@ class PasswdGenAutofillService : AutofillService() {
         // Zapisywanie nowych haseł przez system zostanie włączone po fizycznym teście
         // bezpiecznego wypełniania w aplikacjach natywnych.
         callback.onSuccess()
+    }
+
+    private fun saveDiagnostic(stats: AutofillParseStats, outcome: String) {
+        AutofillDiagnosticStore.save(
+            this,
+            AutofillDiagnostic(
+                timestampMillis = System.currentTimeMillis(),
+                packageName = stats.packageName,
+                windowCount = stats.windowCount,
+                nodeCount = stats.nodeCount,
+                autofillIdCount = stats.autofillIdCount,
+                textCandidateCount = stats.textCandidateCount,
+                usernameDetected = stats.usernameDetected,
+                passwordDetected = stats.passwordDetected,
+                webDomainDetected = stats.webDomainDetected,
+                outcome = outcome,
+            ),
+        )
+    }
+
+    private fun saveEmptyDiagnostic(outcome: String) {
+        AutofillDiagnosticStore.save(
+            this,
+            AutofillDiagnostic(
+                timestampMillis = System.currentTimeMillis(),
+                packageName = "",
+                windowCount = 0,
+                nodeCount = 0,
+                autofillIdCount = 0,
+                textCandidateCount = 0,
+                usernameDetected = false,
+                passwordDetected = false,
+                webDomainDetected = false,
+                outcome = outcome,
+            ),
+        )
     }
 
     private companion object {
