@@ -29,14 +29,18 @@ class PasswdGenAutofillService : AutofillService() {
             return
         }
 
-        val structure = request.fillContexts.lastOrNull()?.structure
+        val contexts = request.fillContexts
+        val structure = contexts.lastOrNull()?.structure
         if (structure == null) {
             saveEmptyDiagnostic("Android nie przekazał struktury formularza")
             callback.onSuccess(null)
             return
         }
 
-        val analysis = AssistStructureParser.analyze(structure)
+        val analyses = contexts.map { context ->
+            AssistStructureParser.analyze(context.structure)
+        }
+        val analysis = analyses.last()
         val form = analysis.form
         val ids = listOfNotNull(form?.usernameId, form?.passwordId).distinct()
         if (form == null || ids.isEmpty()) {
@@ -45,6 +49,10 @@ class PasswdGenAutofillService : AutofillService() {
             return
         }
 
+        val sessionForm = AutofillSessionPolicy.merge(
+            forms = analyses.mapNotNull(AutofillParseResult::form),
+            current = form,
+        )
         val authenticationIntent = Intent(this, AutofillAuthActivity::class.java).apply {
             putExtra(AutofillAuthActivity.EXTRA_USERNAME_ID, form.usernameId)
             putExtra(AutofillAuthActivity.EXTRA_PASSWORD_ID, form.passwordId)
@@ -59,7 +67,7 @@ class PasswdGenAutofillService : AutofillService() {
             targetDetail = domain
             saveDiagnostic(
                 analysis.stats,
-                "Gotowe: formularz WWW; zapis ${saveModeLabel(form)}; przycisk zatwierdzenia ${yesNo(form.submitId != null)}",
+                diagnosticOutcome("formularz WWW", form, sessionForm),
             )
         } else {
             val identity = NativeAppIdentityResolver.resolve(this, form.packageName)
@@ -76,7 +84,7 @@ class PasswdGenAutofillService : AutofillService() {
             targetDetail = identity.appLabel
             saveDiagnostic(
                 analysis.stats,
-                "Gotowe: aplikacja natywna; zapis ${saveModeLabel(form)}; przycisk zatwierdzenia ${yesNo(form.submitId != null)}",
+                diagnosticOutcome("aplikacja natywna", form, sessionForm),
             )
         }
 
@@ -100,7 +108,7 @@ class PasswdGenAutofillService : AutofillService() {
 
         val response = FillResponse.Builder()
             .addDataset(lockedDataset)
-        buildSaveInfo(form)?.let(response::setSaveInfo)
+        buildSaveInfo(sessionForm)?.let(response::setSaveInfo)
         callback.onSuccess(response.build())
     }
 
@@ -168,7 +176,7 @@ class PasswdGenAutofillService : AutofillService() {
             }
     }
 
-    private fun buildSaveInfo(form: AutofillForm): SaveInfo? {
+    private fun buildSaveInfo(form: AutofillSessionForm): SaveInfo? {
         val requiredIds = listOfNotNull(form.usernameId, form.passwordId).distinct()
         if (requiredIds.isEmpty()) return null
 
@@ -176,16 +184,19 @@ class PasswdGenAutofillService : AutofillService() {
         if (form.usernameId != null) dataType = dataType or SaveInfo.SAVE_DATA_TYPE_USERNAME
         if (form.passwordId != null) dataType = dataType or SaveInfo.SAVE_DATA_TYPE_PASSWORD
 
-        val flags = if (form.passwordId == null) {
-            SaveInfo.FLAG_DELAY_SAVE
-        } else {
-            SaveInfo.FLAG_SAVE_ON_ALL_VIEWS_INVISIBLE
+        val workflow = AutofillSessionPolicy.workflow(
+            usernameDetected = form.usernameId != null,
+            passwordDetected = form.passwordId != null,
+        )
+        val flags = when (workflow) {
+            AutofillSaveWorkflow.DELAY -> SaveInfo.FLAG_DELAY_SAVE
+            AutofillSaveWorkflow.COMPLETE -> SaveInfo.FLAG_SAVE_ON_ALL_VIEWS_INVISIBLE
         }
         return SaveInfo.Builder(dataType, requiredIds.toTypedArray())
             .setDescription("Zapisz nowe dane lub zaktualizuj hasło w PasswdGen")
             .setFlags(flags)
             .apply {
-                if (form.passwordId != null) {
+                if (workflow == AutofillSaveWorkflow.COMPLETE) {
                     form.submitId?.let(::setTriggerId)
                 }
             }
@@ -238,10 +249,23 @@ class PasswdGenAutofillService : AutofillService() {
         AutofillDiagnosticStore.saveSaveOutcome(this, outcome)
     }
 
-    private fun saveModeLabel(form: AutofillForm): String = when {
-        form.usernameId != null && form.passwordId != null -> "login + hasło"
-        form.usernameId != null -> "etap loginu odroczony"
-        else -> "etap hasła"
+    private fun diagnosticOutcome(
+        targetType: String,
+        current: AutofillForm,
+        session: AutofillSessionForm,
+    ): String = buildString {
+        append("Gotowe: $targetType")
+        append("; bieżący etap ${fieldModeLabel(current.usernameId != null, current.passwordId != null)}")
+        append("; sesja ${fieldModeLabel(session.usernameId != null, session.passwordId != null)}")
+        append("; konteksty ${session.contextCount}")
+        append("; przycisk zatwierdzenia ${yesNo(session.submitId != null)}")
+    }
+
+    private fun fieldModeLabel(usernameDetected: Boolean, passwordDetected: Boolean): String = when {
+        usernameDetected && passwordDetected -> "login + hasło"
+        usernameDetected -> "login"
+        passwordDetected -> "hasło"
+        else -> "brak pól"
     }
 
     private fun yesNo(value: Boolean): String = if (value) "tak" else "nie"
