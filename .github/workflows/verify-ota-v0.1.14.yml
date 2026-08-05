@@ -1,0 +1,56 @@
+name: Verify OTA v0.1.14
+
+on:
+  push:
+    branches:
+      - agent/android-vault-mvp
+    paths:
+      - .github/workflows/verify-ota-v0.1.14.yml
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: v0.1.14
+    steps:
+      - name: Verify release assets and manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_json="$(mktemp)"
+          update_json="$(mktemp)"
+          apk_file="$(mktemp)"
+
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" > "${release_json}"
+
+          update_id="$(jq -r '.assets[] | select(.name == "update.json") | .id' "${release_json}")"
+          apk_id="$(jq -r '.assets[] | select(.name == "PasswdGen-release.apk") | .id' "${release_json}")"
+          apk_size="$(jq -r '.assets[] | select(.name == "PasswdGen-release.apk") | .size' "${release_json}")"
+
+          test -n "${update_id}"
+          test -n "${apk_id}"
+          test "${apk_size}" -gt 0
+
+          gh api -H "Accept: application/octet-stream" \
+            "repos/${GITHUB_REPOSITORY}/releases/assets/${update_id}" > "${update_json}"
+          gh api -H "Accept: application/octet-stream" \
+            "repos/${GITHUB_REPOSITORY}/releases/assets/${apk_id}" > "${apk_file}"
+
+          test "$(jq -r '.versionCode' "${update_json}")" = "24"
+          test "$(jq -r '.versionName' "${update_json}")" = "0.1.14"
+          test "$(jq -r '.apkUrl' "${update_json}")" = \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/PasswdGen-release.apk"
+
+          expected_sha="$(jq -r '.sha256' "${update_json}")"
+          actual_sha="$(sha256sum "${apk_file}" | awk '{print $1}')"
+          test "${expected_sha}" = "${actual_sha}"
+          test "${expected_sha}" != "null"
+          test "${#expected_sha}" -eq 64
+
+          gh issue comment 1 --body "### OTA ${RELEASE_TAG} — VERIFIED\n\n- GitHub Release istnieje,\n- `PasswdGen-release.apk` istnieje i ma ${apk_size} bajtów,\n- `update.json` wskazuje versionCode 24 / versionName 0.1.14,\n- URL APK jest prawidłowy,\n- SHA-256 pobranego APK jest zgodne z manifestem: `${actual_sha}`.\n\nAktualizacja jest dostępna dla mechanizmu OTA aplikacji."
