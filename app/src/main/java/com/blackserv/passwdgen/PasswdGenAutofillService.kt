@@ -2,10 +2,12 @@ package com.blackserv.passwdgen
 
 import android.app.PendingIntent
 import android.content.Intent
+import android.os.Build
 import android.os.CancellationSignal
 import android.service.autofill.AutofillService
 import android.service.autofill.Dataset
 import android.service.autofill.FillCallback
+import android.service.autofill.FillEventHistory
 import android.service.autofill.FillRequest
 import android.service.autofill.FillResponse
 import android.service.autofill.SaveCallback
@@ -20,6 +22,8 @@ class PasswdGenAutofillService : AutofillService() {
         cancellationSignal: CancellationSignal,
         callback: FillCallback,
     ) {
+        capturePreviousSaveUiOutcome()
+
         if (cancellationSignal.isCanceled) {
             callback.onSuccess(null)
             return
@@ -53,7 +57,10 @@ class PasswdGenAutofillService : AutofillService() {
             authenticationIntent.putExtra(AutofillAuthActivity.EXTRA_WEB_DOMAIN, domain)
             targetLabel = "Odblokuj PasswdGen"
             targetDetail = domain
-            saveDiagnostic(analysis.stats, "Gotowe: formularz WWW")
+            saveDiagnostic(
+                analysis.stats,
+                "Gotowe: formularz WWW; zapis ${saveModeLabel(form)}; przycisk zatwierdzenia ${yesNo(form.submitId != null)}",
+            )
         } else {
             val identity = NativeAppIdentityResolver.resolve(this, form.packageName)
             if (identity == null) {
@@ -67,7 +74,10 @@ class PasswdGenAutofillService : AutofillService() {
             )
             targetLabel = "Odblokuj PasswdGen"
             targetDetail = identity.appLabel
-            saveDiagnostic(analysis.stats, "Gotowe: aplikacja natywna")
+            saveDiagnostic(
+                analysis.stats,
+                "Gotowe: aplikacja natywna; zapis ${saveModeLabel(form)}; przycisk zatwierdzenia ${yesNo(form.submitId != null)}",
+            )
         }
 
         val pendingIntent = PendingIntent.getActivity(
@@ -85,6 +95,7 @@ class PasswdGenAutofillService : AutofillService() {
             form.usernameId?.let { setValue(it, null, presentation) }
             form.passwordId?.let { setValue(it, null, presentation) }
             setAuthentication(pendingIntent.intentSender)
+            setId("passwdgen-locked")
         }.build()
 
         val response = FillResponse.Builder()
@@ -94,10 +105,18 @@ class PasswdGenAutofillService : AutofillService() {
     }
 
     override fun onSaveRequest(request: SaveRequest, callback: SaveCallback) {
+        AutofillDiagnosticStore.saveSaveOutcome(
+            this,
+            "Android wywołał zapis po zaakceptowaniu systemowego monitu.",
+        )
         val captured = AutofillSaveExtractor.extract(
             request.fillContexts.map { context -> context.structure },
         )
         if (captured == null) {
+            AutofillDiagnosticStore.saveSaveOutcome(
+                this,
+                "Żądanie zapisu dotarło, ale nie udało się odczytać kompletnego loginu i hasła.",
+            )
             callback.onFailure("Nie udało się bezpiecznie odczytać loginu i hasła z formularza.")
             return
         }
@@ -105,6 +124,10 @@ class PasswdGenAutofillService : AutofillService() {
         val target = captured.webDomain?.let(AutofillSaveTarget::Web) ?: run {
             val identity = NativeAppIdentityResolver.resolve(this, captured.packageName)
             if (identity == null) {
+                AutofillDiagnosticStore.saveSaveOutcome(
+                    this,
+                    "Żądanie zapisu dotarło, ale weryfikacja aplikacji nie powiodła się.",
+                )
                 callback.onFailure("Nie udało się zweryfikować aplikacji przed zapisem.")
                 return
             }
@@ -128,27 +151,100 @@ class PasswdGenAutofillService : AutofillService() {
         }
 
         runCatching { startActivity(saveIntent) }
-            .onSuccess { callback.onSuccess() }
+            .onSuccess {
+                AutofillDiagnosticStore.saveSaveOutcome(
+                    this,
+                    "Systemowy monit zaakceptowany; otwarto bezpieczne potwierdzenie PasswdGen.",
+                )
+                callback.onSuccess()
+            }
             .onFailure {
                 PendingAutofillSaveStore.remove(token)
+                AutofillDiagnosticStore.saveSaveOutcome(
+                    this,
+                    "Systemowy monit zaakceptowany, ale nie udało się otworzyć potwierdzenia PasswdGen.",
+                )
                 callback.onFailure("Nie udało się otworzyć bezpiecznego potwierdzenia zapisu.")
             }
     }
 
     private fun buildSaveInfo(form: AutofillForm): SaveInfo? {
-        val passwordId = form.passwordId ?: return null
-        val builder = SaveInfo.Builder(
-            SaveInfo.SAVE_DATA_TYPE_PASSWORD or SaveInfo.SAVE_DATA_TYPE_USERNAME,
-            arrayOf(passwordId),
-        )
-            .setDescription("Zapisz nowe dane lub zaktualizuj hasło w PasswdGen")
-            .setFlags(SaveInfo.FLAG_SAVE_ON_ALL_VIEWS_INVISIBLE)
+        val requiredIds = listOfNotNull(form.usernameId, form.passwordId).distinct()
+        if (requiredIds.isEmpty()) return null
 
-        form.usernameId
-            ?.takeIf { it != passwordId }
-            ?.let { builder.setOptionalIds(arrayOf(it)) }
-        return builder.build()
+        var dataType = 0
+        if (form.usernameId != null) dataType = dataType or SaveInfo.SAVE_DATA_TYPE_USERNAME
+        if (form.passwordId != null) dataType = dataType or SaveInfo.SAVE_DATA_TYPE_PASSWORD
+
+        val flags = if (form.passwordId == null) {
+            SaveInfo.FLAG_DELAY_SAVE
+        } else {
+            SaveInfo.FLAG_SAVE_ON_ALL_VIEWS_INVISIBLE
+        }
+        return SaveInfo.Builder(dataType, requiredIds.toTypedArray())
+            .setDescription("Zapisz nowe dane lub zaktualizuj hasło w PasswdGen")
+            .setFlags(flags)
+            .apply {
+                if (form.passwordId != null) {
+                    form.submitId?.let(::setTriggerId)
+                }
+            }
+            .build()
     }
+
+    @Suppress("DEPRECATION")
+    private fun capturePreviousSaveUiOutcome() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        val events = runCatching { fillEventHistory?.events.orEmpty() }
+            .getOrElse { return }
+        if (events.any { event -> event.type == FillEventHistory.Event.TYPE_SAVE_SHOWN }) {
+            AutofillDiagnosticStore.saveSaveOutcome(
+                this,
+                "Android wyświetlił systemowy monit zapisu.",
+            )
+            return
+        }
+
+        val committed = events.lastOrNull { event ->
+            event.type == FillEventHistory.Event.TYPE_CONTEXT_COMMITTED
+        } ?: return
+        val outcome = when (committed.noSaveUiReason) {
+            FillEventHistory.Event.NO_SAVE_UI_REASON_NONE ->
+                "Sesja formularza została zatwierdzona; Android nie podał powodu blokady monitu."
+
+            FillEventHistory.Event.NO_SAVE_UI_REASON_NO_SAVE_INFO ->
+                "Android nie znalazł SaveInfo w ostatniej odpowiedzi PasswdGen."
+
+            FillEventHistory.Event.NO_SAVE_UI_REASON_WITH_DELAY_SAVE_FLAG ->
+                "Zapis został odroczony, ponieważ formularz jest wieloetapowy."
+
+            FillEventHistory.Event.NO_SAVE_UI_REASON_HAS_EMPTY_REQUIRED ->
+                "Monit nie został pokazany: co najmniej jedno wymagane pole było puste."
+
+            FillEventHistory.Event.NO_SAVE_UI_REASON_NO_VALUE_CHANGED ->
+                "Monit nie został pokazany: Android nie wykrył zmiany wartości."
+
+            FillEventHistory.Event.NO_SAVE_UI_REASON_FIELD_VALIDATION_FAILED ->
+                "Monit nie został pokazany: walidacja pola nie powiodła się."
+
+            FillEventHistory.Event.NO_SAVE_UI_REASON_DATASET_MATCH ->
+                "Monit nie został pokazany: wartości odpowiadały istniejącemu zestawowi danych."
+
+            NO_SAVE_UI_REASON_USING_CREDMAN ->
+                "Monit nie został pokazany: Android użył Credential Manager zamiast klasycznego Autofill."
+
+            else -> "Monit zapisu nie został pokazany; nieznany kod systemowy ${committed.noSaveUiReason}."
+        }
+        AutofillDiagnosticStore.saveSaveOutcome(this, outcome)
+    }
+
+    private fun saveModeLabel(form: AutofillForm): String = when {
+        form.usernameId != null && form.passwordId != null -> "login + hasło"
+        form.usernameId != null -> "etap loginu odroczony"
+        else -> "etap hasła"
+    }
+
+    private fun yesNo(value: Boolean): String = if (value) "tak" else "nie"
 
     private fun saveDiagnostic(stats: AutofillParseStats, outcome: String) {
         AutofillDiagnosticStore.save(
@@ -187,6 +283,7 @@ class PasswdGenAutofillService : AutofillService() {
     }
 
     private companion object {
+        const val NO_SAVE_UI_REASON_USING_CREDMAN = 7
         val REQUEST_CODE = AtomicInteger(10_000)
     }
 }
