@@ -34,7 +34,11 @@ internal object AutofillSpaSubmitPolicy {
                     val id = node.autofillId ?: return@walk
                     val htmlInfo = node.htmlInfo
                     val attributes = htmlInfo?.attributes.orEmpty()
-                        .filter { (name, _) -> name.lowercase(Locale.ROOT) in safeAttributeNames }
+                        .mapNotNull { attribute ->
+                            val name = attribute.first?.lowercase(Locale.ROOT) ?: return@mapNotNull null
+                            val value = attribute.second ?: return@mapNotNull null
+                            if (name in safeAttributeNames) name to value else null
+                        }
                     if (
                         isActionCandidate(
                             htmlTag = htmlInfo?.tag,
