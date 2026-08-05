@@ -73,6 +73,96 @@ class AutofillPolicyTest {
     }
 
     @Test
+    fun `registration fallback selects the unique email value among generic fields`() {
+        val candidates = listOf(
+            AutofillUsernameCandidateSignals(
+                descriptors = listOf("name firstName", "placeholder Imię"),
+                inputType = InputType.TYPE_CLASS_TEXT,
+                autofillHints = emptyList(),
+                value = "Jan",
+            ),
+            AutofillUsernameCandidateSignals(
+                descriptors = listOf("name lastName", "placeholder Nazwisko"),
+                inputType = InputType.TYPE_CLASS_TEXT,
+                autofillHints = emptyList(),
+                value = "Kowalski",
+            ),
+            AutofillUsernameCandidateSignals(
+                descriptors = listOf("field registration-3"),
+                inputType = InputType.TYPE_CLASS_TEXT,
+                autofillHints = emptyList(),
+                value = "jan@example.com",
+            ),
+            AutofillUsernameCandidateSignals(
+                descriptors = listOf("name address", "placeholder Adres"),
+                inputType = InputType.TYPE_CLASS_TEXT,
+                autofillHints = emptyList(),
+                value = "Testowa 1",
+            ),
+        )
+
+        assertEquals(2, AutofillUsernameFallbackPolicy.selectIndex(candidates))
+    }
+
+    @Test
+    fun `registration fallback rejects ambiguous generic values`() {
+        val candidates = listOf(
+            AutofillUsernameCandidateSignals(
+                descriptors = listOf("field one"),
+                inputType = InputType.TYPE_CLASS_TEXT,
+                autofillHints = emptyList(),
+                value = "alpha",
+            ),
+            AutofillUsernameCandidateSignals(
+                descriptors = listOf("field two"),
+                inputType = InputType.TYPE_CLASS_TEXT,
+                autofillHints = emptyList(),
+                value = "beta",
+            ),
+        )
+
+        assertNull(AutofillUsernameFallbackPolicy.selectIndex(candidates))
+    }
+
+    @Test
+    fun `selects primary password and explicit confirmation separately`() {
+        val candidates = listOf(
+            AutofillPasswordCandidateSignals(
+                descriptors = listOf("name newPassword", "placeholder Nowe hasło"),
+                autofillHints = listOf("newPassword"),
+                value = "secret-123",
+            ),
+            AutofillPasswordCandidateSignals(
+                descriptors = listOf("name confirmPassword", "placeholder Powtórz hasło"),
+                autofillHints = emptyList(),
+                value = "secret-123",
+            ),
+        )
+
+        val primary = AutofillPasswordCandidatePolicy.primaryIndex(candidates)
+        assertEquals(0, primary)
+        assertEquals(
+            1,
+            AutofillPasswordCandidatePolicy.confirmationIndex(candidates, primary),
+        )
+    }
+
+    @Test
+    fun `detects matching second password even without confirmation metadata`() {
+        val candidates = listOf(
+            AutofillPasswordCandidateSignals(emptyList(), emptyList(), "same-secret"),
+            AutofillPasswordCandidateSignals(emptyList(), emptyList(), "same-secret"),
+        )
+
+        val primary = AutofillPasswordCandidatePolicy.primaryIndex(candidates)
+        assertEquals(0, primary)
+        assertEquals(
+            1,
+            AutofillPasswordCandidatePolicy.confirmationIndex(candidates, primary),
+        )
+    }
+
+    @Test
     fun `detects explicit html submit controls`() {
         assertTrue(
             AutofillSubmitPolicy.isSubmitCandidate(
@@ -90,10 +180,10 @@ class AutofillPolicyTest {
                 htmlTag = "button",
                 htmlAttributes = listOf("role" to "button"),
                 className = "android.widget.Button",
-                text = "Sign up",
+                text = "Załóż konto",
                 contentDescription = null,
                 idEntry = null,
-                clickable = true,
+                clickable = false,
             ),
         )
     }
@@ -145,6 +235,7 @@ class AutofillPolicyTest {
         val loginStage = AutofillForm(
             usernameId = null,
             passwordId = null,
+            confirmationPasswordId = null,
             submitId = null,
             webDomain = "www.euro.com.pl",
             packageName = "com.android.chrome",
@@ -165,9 +256,9 @@ class AutofillPolicyTest {
 
     @Test
     fun `native session contexts require the exact same package`() {
-        val first = AutofillForm(null, null, null, null, "com.example.shop")
-        val second = AutofillForm(null, null, null, null, "com.example.shop")
-        val attacker = AutofillForm(null, null, null, null, "com.example.fake")
+        val first = AutofillForm(null, null, null, null, null, "com.example.shop")
+        val second = AutofillForm(null, null, null, null, null, "com.example.shop")
+        val attacker = AutofillForm(null, null, null, null, null, "com.example.fake")
 
         assertTrue(AutofillSessionPolicy.sameTarget(first, second))
         assertFalse(AutofillSessionPolicy.sameTarget(attacker, second))
