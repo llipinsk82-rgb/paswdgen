@@ -7,7 +7,9 @@ import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.os.Parcelable
+import android.security.keystore.UserNotAuthenticatedException
 import android.service.autofill.Dataset
+import android.text.InputType
 import android.view.Gravity
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -15,6 +17,7 @@ import android.view.autofill.AutofillId
 import android.view.autofill.AutofillManager
 import android.view.autofill.AutofillValue
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.RemoteViews
@@ -23,6 +26,7 @@ import android.widget.TextView
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
+import androidx.core.widget.doAfterTextChanged
 import androidx.fragment.app.FragmentActivity
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -58,10 +62,11 @@ class AutofillAuthActivity : FragmentActivity() {
         return AuthTarget.Native(identity)
     }
 
-    private fun requestAuthentication(target: AuthTarget) {
-        val authenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG or
-            BiometricManager.Authenticators.DEVICE_CREDENTIAL
-
+    private fun requestAuthentication(
+        target: AuthTarget,
+        authenticators: Int = ALL_AUTHENTICATORS,
+        allowCredentialRetry: Boolean = true,
+    ) {
         when (BiometricManager.from(this).canAuthenticate(authenticators)) {
             BiometricManager.BIOMETRIC_SUCCESS -> Unit
             BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> {
@@ -81,7 +86,7 @@ class AutofillAuthActivity : FragmentActivity() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     super.onAuthenticationSucceeded(result)
                     showLoading(target, "Odblokowuję pasujące konta…")
-                    loadMatchingEntries(target)
+                    loadMatchingEntries(target, allowCredentialRetry)
                 }
 
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
@@ -91,20 +96,31 @@ class AutofillAuthActivity : FragmentActivity() {
             },
         )
 
+        val subtitle = if (authenticators == BiometricManager.Authenticators.DEVICE_CREDENTIAL) {
+            "Potwierdź kodem urządzenia dostęp do kont dla ${target.displayName}"
+        } else {
+            "Dostęp do kont dla ${target.displayName}"
+        }
+
         prompt.authenticate(
             BiometricPrompt.PromptInfo.Builder()
                 .setTitle("Odblokuj PasswdGen")
-                .setSubtitle("Dostęp do kont dla ${target.displayName}")
+                .setSubtitle(subtitle)
                 .setAllowedAuthenticators(authenticators)
                 .setConfirmationRequired(true)
                 .build(),
         )
     }
 
-    private fun loadMatchingEntries(target: AuthTarget) {
+    private fun loadMatchingEntries(
+        target: AuthTarget,
+        allowCredentialRetry: Boolean,
+    ) {
         executor.execute {
             val result = runCatching {
-                val allEntries = VaultRepository(applicationContext).loadAll()
+                val repository = VaultRepository(applicationContext)
+                repository.unlockProbe()
+                val allEntries = repository.loadAll()
                 val matchingEntries = allEntries.filter { entry ->
                     when (target) {
                         is AuthTarget.Web -> AutofillDomainPolicy.matches(entry.website, target.domain)
@@ -120,7 +136,26 @@ class AutofillAuthActivity : FragmentActivity() {
                 result.fold(
                     onSuccess = { lookup -> handleLookupResult(target, lookup) },
                     onFailure = { error ->
-                        showError(error.message ?: "Nie udało się odblokować sejfu.")
+                        when {
+                            allowCredentialRetry && error.hasCause<UserNotAuthenticatedException>() -> {
+                                showLoading(
+                                    target,
+                                    "Biometria została przyjęta, ale Android Keystore wymaga kodu urządzenia.",
+                                )
+                                requestAuthentication(
+                                    target = target,
+                                    authenticators = BiometricManager.Authenticators.DEVICE_CREDENTIAL,
+                                    allowCredentialRetry = false,
+                                )
+                            }
+
+                            error.hasCause<UserNotAuthenticatedException>() -> showError(
+                                "Android Keystore nie zaakceptował uwierzytelnienia. " +
+                                    "Zablokuj i odblokuj ekran urządzenia, a następnie spróbuj ponownie.",
+                            )
+
+                            else -> showError(error.message ?: "Nie udało się odblokować sejfu.")
+                        }
                     },
                 )
             }
@@ -146,30 +181,106 @@ class AutofillAuthActivity : FragmentActivity() {
 
     private fun showNativeLinkChooser(entries: List<VaultEntry>, target: AuthTarget.Native) {
         val identity = target.identity
-        val content = verticalContainer(Gravity.TOP).apply {
-            setPadding(dp(24), dp(36), dp(24), dp(28))
-            addView(titleText("Połącz konto z aplikacją"))
-            addView(bodyText(identity.appLabel).withMargins(top = 10))
-            addView(
-                bodyText(identity.packageName).apply { textSize = 13f }
-                    .withMargins(top = 4, bottom = 14),
-            )
-            addView(
-                bodyText(
-                    "Wybierz konto świadomie. PasswdGen zapamięta pakiet oraz certyfikat tej aplikacji.",
-                ).withMargins(bottom = 22),
-            )
+        showSearchableChooser(
+            title = "Połącz konto z aplikacją",
+            subtitleLines = listOf(
+                identity.appLabel,
+                identity.packageName,
+                "Wybierz konto świadomie. PasswdGen zapamięta pakiet oraz certyfikat tej aplikacji.",
+            ),
+            entries = entries,
+            emptyMessage = "Brak kont pasujących do wyszukiwania.",
+            onSelect = { entry -> bindNativeAppAndReturn(entry, target) },
+        )
+    }
 
-            entries.forEach { entry ->
+    private fun showAccountChooser(entries: List<VaultEntry>, target: AuthTarget) {
+        showSearchableChooser(
+            title = "Wybierz konto",
+            subtitleLines = listOf("Znaleziono ${entries.size} kont dla ${target.displayName}"),
+            entries = entries,
+            emptyMessage = "Brak kont pasujących do wyszukiwania.",
+            onSelect = { entry -> returnDataset(entry, target) },
+        )
+    }
+
+    private fun showSearchableChooser(
+        title: String,
+        subtitleLines: List<String>,
+        entries: List<VaultEntry>,
+        emptyMessage: String,
+        onSelect: (VaultEntry) -> Unit,
+    ) {
+        val content = verticalContainer(Gravity.TOP).apply {
+            setPadding(dp(24), dp(32), dp(24), dp(28))
+            addView(titleText(title))
+            subtitleLines.forEachIndexed { index, line ->
                 addView(
-                    accountButton(entry) {
-                        bindNativeAppAndReturn(entry, target)
-                    }.withMargins(bottom = 12),
+                    bodyText(line).apply {
+                        textSize = if (index == 1 && subtitleLines.size > 1) 13f else 15f
+                    }.withMargins(top = if (index == 0) 10 else 4),
                 )
             }
-            addView(cancelButton().withMargins(top = 8))
         }
+
+        val search = EditText(this).apply {
+            hint = "Szukaj konta"
+            setHintTextColor(Color.rgb(139, 156, 170))
+            setTextColor(Color.WHITE)
+            textSize = 16f
+            isSingleLine = true
+            inputType = InputType.TYPE_CLASS_TEXT
+            backgroundTintList = ColorStateList.valueOf(Color.rgb(36, 181, 212))
+            setPadding(dp(4), dp(8), dp(4), dp(8))
+        }
+        content.addView(search.withMargins(top = 18, bottom = 14))
+
+        val resultCount = bodyText("").apply {
+            textSize = 13f
+            gravity = Gravity.START
+        }
+        content.addView(resultCount.withMargins(bottom = 10))
+
+        val results = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+        content.addView(results)
+        content.addView(cancelButton().withMargins(top = 12))
+
+        fun render(query: String) {
+            val normalizedQuery = query.trim().lowercase(Locale.ROOT)
+            val filtered = if (normalizedQuery.isBlank()) {
+                entries
+            } else {
+                entries.filter { entry ->
+                    entry.service.lowercase(Locale.ROOT).contains(normalizedQuery) ||
+                        entry.username.lowercase(Locale.ROOT).contains(normalizedQuery) ||
+                        entry.website.lowercase(Locale.ROOT).contains(normalizedQuery)
+                }
+            }
+
+            resultCount.text = "Kont: ${filtered.size} z ${entries.size}"
+            results.removeAllViews()
+            if (filtered.isEmpty()) {
+                results.addView(bodyText(emptyMessage).withMargins(top = 10, bottom = 10))
+            } else {
+                filtered.forEach { entry ->
+                    results.addView(
+                        accountButton(entry) { onSelect(entry) }
+                            .withMargins(bottom = 10),
+                    )
+                }
+            }
+        }
+
+        search.doAfterTextChanged { value -> render(value?.toString().orEmpty()) }
+        render("")
         showScrollable(content)
+        search.requestFocus()
     }
 
     private fun bindNativeAppAndReturn(entry: VaultEntry, target: AuthTarget.Native) {
@@ -234,36 +345,24 @@ class AutofillAuthActivity : FragmentActivity() {
         finish()
     }
 
-    private fun showAccountChooser(entries: List<VaultEntry>, target: AuthTarget) {
-        val content = verticalContainer(Gravity.TOP).apply {
-            setPadding(dp(24), dp(40), dp(24), dp(28))
-            addView(titleText("Wybierz konto"))
-            addView(
-                bodyText("Znaleziono ${entries.size} kont dla ${target.displayName}")
-                    .withMargins(top = 8, bottom = 20),
-            )
-
-            entries.forEach { entry ->
-                addView(
-                    accountButton(entry) { returnDataset(entry, target) }
-                        .withMargins(bottom = 12),
-                )
-            }
-            addView(cancelButton().withMargins(top = 8))
-        }
-        showScrollable(content)
-    }
-
     private fun accountButton(entry: VaultEntry, onClick: () -> Unit): Button =
         Button(this).apply {
-            text = "${entry.service}\n${entry.username}"
+            text = buildString {
+                append(entry.service)
+                append('\n')
+                append(entry.username)
+                if (entry.website.isNotBlank()) {
+                    append('\n')
+                    append(entry.website)
+                }
+            }
             isAllCaps = false
-            textSize = 16f
+            textSize = 15f
             setTextColor(Color.WHITE)
             gravity = Gravity.START or Gravity.CENTER_VERTICAL
             backgroundTintList = ColorStateList.valueOf(Color.rgb(22, 33, 45))
-            setPadding(dp(18), dp(8), dp(18), dp(8))
-            minHeight = dp(66)
+            setPadding(dp(18), dp(10), dp(18), dp(10))
+            minHeight = dp(72)
             setOnClickListener { onClick() }
         }
 
@@ -279,6 +378,7 @@ class AutofillAuthActivity : FragmentActivity() {
         setContentView(
             ScrollView(this).apply {
                 setBackgroundColor(BACKGROUND_COLOR)
+                isFillViewport = true
                 addView(
                     content,
                     ViewGroup.LayoutParams(
@@ -387,6 +487,15 @@ class AutofillAuthActivity : FragmentActivity() {
         }
     }
 
+    private inline fun <reified T : Throwable> Throwable.hasCause(): Boolean {
+        var current: Throwable? = this
+        while (current != null) {
+            if (current is T) return true
+            current = current.cause
+        }
+        return false
+    }
+
     private sealed interface AuthTarget {
         val displayName: String
 
@@ -410,6 +519,9 @@ class AutofillAuthActivity : FragmentActivity() {
         const val EXTRA_WEB_DOMAIN = "autofill_web_domain"
         const val EXTRA_NATIVE_PACKAGE = "autofill_native_package"
         private val BACKGROUND_COLOR = Color.rgb(6, 14, 23)
+        private const val ALL_AUTHENTICATORS =
+            BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                BiometricManager.Authenticators.DEVICE_CREDENTIAL
         private val entryComparator =
             compareBy<VaultEntry> { it.service.lowercase(Locale.ROOT) }
                 .thenBy { it.username.lowercase(Locale.ROOT) }
