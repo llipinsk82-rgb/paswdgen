@@ -125,6 +125,55 @@ class AutofillPolicyTest {
     }
 
     @Test
+    fun `multi-step save is delayed until login and password are both available`() {
+        assertEquals(
+            AutofillSaveWorkflow.DELAY,
+            AutofillSessionPolicy.workflow(usernameDetected = true, passwordDetected = false),
+        )
+        assertEquals(
+            AutofillSaveWorkflow.DELAY,
+            AutofillSessionPolicy.workflow(usernameDetected = false, passwordDetected = true),
+        )
+        assertEquals(
+            AutofillSaveWorkflow.COMPLETE,
+            AutofillSessionPolicy.workflow(usernameDetected = true, passwordDetected = true),
+        )
+    }
+
+    @Test
+    fun `session contexts are combined only for the exact same web target`() {
+        val loginStage = AutofillForm(
+            usernameId = null,
+            passwordId = null,
+            submitId = null,
+            webDomain = "www.euro.com.pl",
+            packageName = "com.android.chrome",
+        )
+        val passwordStage = loginStage.copy(webDomain = "euro.com.pl")
+        val unrelated = loginStage.copy(webDomain = "evil-euro.com.pl")
+
+        assertTrue(AutofillSessionPolicy.sameTarget(loginStage, passwordStage))
+        assertFalse(AutofillSessionPolicy.sameTarget(unrelated, passwordStage))
+        assertEquals(
+            2,
+            AutofillSessionPolicy.merge(
+                forms = listOf(loginStage, unrelated, passwordStage),
+                current = passwordStage,
+            ).contextCount,
+        )
+    }
+
+    @Test
+    fun `native session contexts require the exact same package`() {
+        val first = AutofillForm(null, null, null, null, "com.example.shop")
+        val second = AutofillForm(null, null, null, null, "com.example.shop")
+        val attacker = AutofillForm(null, null, null, null, "com.example.fake")
+
+        assertTrue(AutofillSessionPolicy.sameTarget(first, second))
+        assertFalse(AutofillSessionPolicy.sameTarget(attacker, second))
+    }
+
+    @Test
     fun `autofill only matches exact normalized host`() {
         assertTrue(AutofillDomainPolicy.matches("https://www.example.com/login", "example.com"))
         assertFalse(AutofillDomainPolicy.matches("login.example.com", "example.com"))
