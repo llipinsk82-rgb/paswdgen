@@ -1,6 +1,7 @@
 package com.blackserv.passwdgen
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -92,6 +93,28 @@ class AutofillSavePolicyTest {
         assertEquals(
             listOf(AndroidAppBinding(identity.packageName, identity.signerSha256)),
             native.androidApps,
+        )
+    }
+
+    @Test
+    fun `password confirmation must match when present`() {
+        assertTrue(
+            AutofillPasswordConfirmationPolicy.isConsistent(
+                password = "same-secret",
+                confirmationPassword = "same-secret",
+            ),
+        )
+        assertTrue(
+            AutofillPasswordConfirmationPolicy.isConsistent(
+                password = "same-secret",
+                confirmationPassword = null,
+            ),
+        )
+        assertFalse(
+            AutofillPasswordConfirmationPolicy.isConsistent(
+                password = "same-secret",
+                confirmationPassword = "different-secret",
+            ),
         )
     }
 }
