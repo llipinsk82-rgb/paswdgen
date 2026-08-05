@@ -1,7 +1,9 @@
 package com.blackserv.passwdgen
 
+import android.text.InputType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -116,5 +118,72 @@ class AutofillSavePolicyTest {
                 confirmationPassword = "different-secret",
             ),
         )
+    }
+
+    @Test
+    fun `save recovery selects unique email among registration fields`() {
+        val candidates = listOf(
+            AutofillUsernameCandidateSignals(
+                descriptors = listOf("name firstName", "placeholder Imię"),
+                inputType = InputType.TYPE_CLASS_TEXT,
+                autofillHints = emptyList(),
+                value = "Jan",
+            ),
+            AutofillUsernameCandidateSignals(
+                descriptors = listOf("name lastName", "placeholder Nazwisko"),
+                inputType = InputType.TYPE_CLASS_TEXT,
+                autofillHints = emptyList(),
+                value = "Kowalski",
+            ),
+            AutofillUsernameCandidateSignals(
+                descriptors = listOf("field registration-3"),
+                inputType = InputType.TYPE_CLASS_TEXT,
+                autofillHints = emptyList(),
+                value = "jan@example.com",
+            ),
+            AutofillUsernameCandidateSignals(
+                descriptors = listOf("name address", "placeholder Adres"),
+                inputType = InputType.TYPE_CLASS_TEXT,
+                autofillHints = emptyList(),
+                value = "Testowa 1",
+            ),
+        )
+
+        assertEquals("jan@example.com", AutofillSaveUsernamePolicy.selectValue(candidates))
+    }
+
+    @Test
+    fun `save recovery deduplicates the same email across contexts`() {
+        val candidate = AutofillUsernameCandidateSignals(
+            descriptors = listOf("field account"),
+            inputType = InputType.TYPE_CLASS_TEXT,
+            autofillHints = emptyList(),
+            value = "member@example.com",
+        )
+
+        assertEquals(
+            "member@example.com",
+            AutofillSaveUsernamePolicy.selectValue(listOf(candidate, candidate.copy())),
+        )
+    }
+
+    @Test
+    fun `save recovery rejects ambiguous or non credential values`() {
+        val firstEmail = AutofillUsernameCandidateSignals(
+            descriptors = listOf("field one"),
+            inputType = InputType.TYPE_CLASS_TEXT,
+            autofillHints = emptyList(),
+            value = "first@example.com",
+        )
+        val secondEmail = firstEmail.copy(value = "second@example.com")
+        assertNull(AutofillSaveUsernamePolicy.selectValue(listOf(firstEmail, secondEmail)))
+
+        val nameOnly = AutofillUsernameCandidateSignals(
+            descriptors = listOf("name firstName", "placeholder Imię"),
+            inputType = InputType.TYPE_CLASS_TEXT,
+            autofillHints = emptyList(),
+            value = "Jan",
+        )
+        assertNull(AutofillSaveUsernamePolicy.selectValue(listOf(nameOnly)))
     }
 }
