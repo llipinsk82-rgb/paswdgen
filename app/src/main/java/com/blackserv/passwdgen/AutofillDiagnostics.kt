@@ -16,12 +16,15 @@ internal data class AutofillDiagnostic(
     val passwordDetected: Boolean,
     val webDomainDetected: Boolean,
     val outcome: String,
+    val sessionToken: String = "",
+    val targetKey: String = "",
     val saveTimestampMillis: Long = 0L,
     val saveOutcome: String? = null,
 ) {
     fun asReport(): String = buildString {
         appendLine("Czas: ${formatTimestamp(timestampMillis)}")
         appendLine("Pakiet: ${packageName.ifBlank { "nieprzekazany" }}")
+        appendLine("Cel sesji: ${targetKey.ifBlank { "nieustalony" }}")
         appendLine("Okna: $windowCount")
         appendLine("Węzły: $nodeCount")
         appendLine("Pola z AutofillId: $autofillIdCount")
@@ -33,7 +36,7 @@ internal data class AutofillDiagnostic(
         saveOutcome?.let { value ->
             appendLine()
             appendLine(
-                "Poprzednia sesja zapisu (${formatTimestamp(saveTimestampMillis)}): $value",
+                "Wynik zapisu tej sesji (${formatTimestamp(saveTimestampMillis)}): $value",
             )
         }
     }.trimEnd()
@@ -58,12 +61,16 @@ internal object AutofillDiagnosticStore {
     private const val KEY_PASSWORD = "password"
     private const val KEY_WEB_DOMAIN = "web_domain"
     private const val KEY_OUTCOME = "outcome"
+    private const val KEY_SESSION_TOKEN = "session_token"
+    private const val KEY_TARGET_KEY = "target_key"
     private const val KEY_SAVE_TIMESTAMP = "save_timestamp"
     private const val KEY_SAVE_OUTCOME = "save_outcome"
 
     fun save(context: Context, value: AutofillDiagnostic) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit()
+        val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val sameSession = preferences.getString(KEY_SESSION_TOKEN, null) == value.sessionToken &&
+            preferences.getString(KEY_TARGET_KEY, null) == value.targetKey
+        preferences.edit()
             .putLong(KEY_TIMESTAMP, value.timestampMillis)
             .putString(KEY_PACKAGE, value.packageName)
             .putInt(KEY_WINDOWS, value.windowCount)
@@ -74,12 +81,30 @@ internal object AutofillDiagnosticStore {
             .putBoolean(KEY_PASSWORD, value.passwordDetected)
             .putBoolean(KEY_WEB_DOMAIN, value.webDomainDetected)
             .putString(KEY_OUTCOME, value.outcome)
+            .putString(KEY_SESSION_TOKEN, value.sessionToken)
+            .putString(KEY_TARGET_KEY, value.targetKey)
+            .apply {
+                if (!sameSession) {
+                    remove(KEY_SAVE_TIMESTAMP)
+                    remove(KEY_SAVE_OUTCOME)
+                }
+            }
             .apply()
     }
 
-    fun saveSaveOutcome(context: Context, outcome: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit()
+    fun saveSaveOutcome(
+        context: Context,
+        sessionToken: String?,
+        targetKey: String?,
+        outcome: String,
+    ) {
+        if (sessionToken.isNullOrBlank() || targetKey.isNullOrBlank()) return
+        val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val currentSession = preferences.getString(KEY_SESSION_TOKEN, null)
+        val currentTarget = preferences.getString(KEY_TARGET_KEY, null)
+        if (currentSession != sessionToken || currentTarget != targetKey) return
+
+        preferences.edit()
             .putLong(KEY_SAVE_TIMESTAMP, System.currentTimeMillis())
             .putString(KEY_SAVE_OUTCOME, outcome)
             .apply()
@@ -100,6 +125,8 @@ internal object AutofillDiagnosticStore {
             passwordDetected = preferences.getBoolean(KEY_PASSWORD, false),
             webDomainDetected = preferences.getBoolean(KEY_WEB_DOMAIN, false),
             outcome = preferences.getString(KEY_OUTCOME, "brak").orEmpty(),
+            sessionToken = preferences.getString(KEY_SESSION_TOKEN, "").orEmpty(),
+            targetKey = preferences.getString(KEY_TARGET_KEY, "").orEmpty(),
             saveTimestampMillis = preferences.getLong(KEY_SAVE_TIMESTAMP, 0L),
             saveOutcome = preferences.getString(KEY_SAVE_OUTCOME, null),
         )
