@@ -20,9 +20,9 @@ val hasReleaseSigning = listOf(
 val versionCodeProperty = providers.gradleProperty("passwdgen.versionCode").orNull
 val versionNameProperty = providers.gradleProperty("passwdgen.versionName").orNull
 val configuredVersionCode = versionCodeProperty?.toIntOrNull()
-    ?: if (versionCodeProperty == null) 22 else error("passwdgen.versionCode must be a positive integer")
+    ?: if (versionCodeProperty == null) 23 else error("passwdgen.versionCode must be a positive integer")
 val configuredVersionName = versionNameProperty?.takeIf { it.isNotBlank() }
-    ?: if (versionNameProperty == null) "0.1.12" else error("passwdgen.versionName must not be blank")
+    ?: if (versionNameProperty == null) "0.1.13" else error("passwdgen.versionName must not be blank")
 require(configuredVersionCode > 0) { "passwdgen.versionCode must be greater than zero" }
 
 android {
