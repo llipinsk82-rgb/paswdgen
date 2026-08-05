@@ -218,6 +218,7 @@ internal object AssistStructureParser {
                     .filter { attribute ->
                         attribute.first.lowercase(Locale.ROOT) in safeHtmlAttributes
                     }
+                    .map { attribute -> attribute.first to attribute.second }
                 if (
                     submitId == null &&
                     AutofillSubmitPolicy.isSubmitCandidate(
