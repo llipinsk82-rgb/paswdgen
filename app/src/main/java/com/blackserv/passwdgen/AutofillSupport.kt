@@ -14,6 +14,7 @@ internal enum class AutofillFieldKind {
 internal data class AutofillForm(
     val usernameId: AutofillId?,
     val passwordId: AutofillId?,
+    val submitId: AutofillId?,
     val webDomain: String?,
     val packageName: String,
 ) {
@@ -110,6 +111,57 @@ internal object AutofillFieldPolicy {
         .filter(Char::isLetterOrDigit)
 }
 
+internal object AutofillSubmitPolicy {
+    private val actionDescriptor = Regex(
+        "(^|[^a-z])(submit|continue|next|login|log in|sign in|sign up|register|create account|" +
+            "zaloguj|dalej|kontynuuj|zarejestruj|utwórz konto)([^a-z]|$)",
+    )
+
+    fun isSubmitCandidate(
+        htmlTag: String?,
+        htmlAttributes: List<Pair<String, String>>,
+        className: CharSequence?,
+        text: CharSequence?,
+        contentDescription: CharSequence?,
+        idEntry: String?,
+        clickable: Boolean,
+    ): Boolean {
+        val attributes = htmlAttributes.associate { (name, value) ->
+            name.lowercase(Locale.ROOT) to value
+        }
+        val htmlType = normalizeToken(attributes["type"].orEmpty())
+        if (htmlType == "submit") return true
+
+        val normalizedTag = normalizeToken(htmlTag.orEmpty())
+        val normalizedRole = normalizeToken(attributes["role"].orEmpty())
+        val normalizedClass = className
+            ?.toString()
+            ?.lowercase(Locale.ROOT)
+            .orEmpty()
+        val isButton = normalizedTag == "button" ||
+            normalizedRole == "button" ||
+            normalizedClass.endsWith("button") ||
+            normalizedClass.contains(".button")
+        if (!clickable || !isButton) return false
+
+        val descriptor = buildList {
+            add(text?.toString())
+            add(contentDescription?.toString())
+            add(idEntry)
+            add(attributes["value"])
+            add(attributes["aria-label"])
+        }
+            .filterNotNull()
+            .joinToString(" ")
+            .lowercase(Locale.ROOT)
+        return actionDescriptor.containsMatchIn(descriptor)
+    }
+
+    private fun normalizeToken(value: String): String = value
+        .lowercase(Locale.ROOT)
+        .filter(Char::isLetterOrDigit)
+}
+
 internal object AutofillDomainPolicy {
     fun normalizeHost(value: String?): String? =
         HostNormalizer.normalize(value, requirePublicStyleHost = true)
@@ -129,6 +181,8 @@ internal object AssistStructureParser {
         "type",
         "placeholder",
         "aria-label",
+        "role",
+        "value",
     )
 
     fun parse(structure: AssistStructure): AutofillForm? = analyze(structure).form
@@ -136,6 +190,7 @@ internal object AssistStructureParser {
     fun analyze(structure: AssistStructure): AutofillParseResult {
         var usernameId: AutofillId? = null
         var passwordId: AutofillId? = null
+        var submitId: AutofillId? = null
         var webDomain: String? = null
         var packageName: String? = structure.activityComponent
             ?.packageName
@@ -156,14 +211,31 @@ internal object AssistStructureParser {
                 val id = node.autofillId ?: return@walk
                 autofillIdCount += 1
 
-                val htmlDescriptors = node.htmlInfo
+                val htmlInfo = node.htmlInfo
+                val htmlAttributes = htmlInfo
                     ?.attributes
                     .orEmpty()
                     .filter { attribute ->
                         attribute.first.lowercase(Locale.ROOT) in safeHtmlAttributes
                     }
-                    .map { attribute -> "${attribute.first} ${attribute.second}" }
+                if (
+                    submitId == null &&
+                    AutofillSubmitPolicy.isSubmitCandidate(
+                        htmlTag = htmlInfo?.tag,
+                        htmlAttributes = htmlAttributes,
+                        className = node.className,
+                        text = node.text,
+                        contentDescription = node.contentDescription,
+                        idEntry = node.idEntry,
+                        clickable = node.isClickable,
+                    )
+                ) {
+                    submitId = id
+                }
 
+                val htmlDescriptors = htmlAttributes.map { attribute ->
+                    "${attribute.first} ${attribute.second}"
+                }
                 val kind = AutofillFieldPolicy.classify(
                     autofillHints = node.autofillHints,
                     inputType = node.inputType,
@@ -197,6 +269,7 @@ internal object AssistStructureParser {
             AutofillForm(
                 usernameId = usernameId,
                 passwordId = passwordId,
+                submitId = submitId,
                 webDomain = webDomain,
                 packageName = resolvedPackage,
             )
