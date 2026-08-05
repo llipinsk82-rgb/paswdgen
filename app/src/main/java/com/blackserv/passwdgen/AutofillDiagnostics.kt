@@ -33,7 +33,7 @@ internal data class AutofillDiagnostic(
         saveOutcome?.let { value ->
             appendLine()
             appendLine(
-                "Wynik zapisu (${formatTimestamp(saveTimestampMillis)}): $value",
+                "Poprzednia sesja zapisu (${formatTimestamp(saveTimestampMillis)}): $value",
             )
         }
     }.trimEnd()
