@@ -59,11 +59,8 @@ internal object AutofillSessionPolicy {
     }
 
     fun workflow(usernameDetected: Boolean, passwordDetected: Boolean): AutofillSaveWorkflow =
-        if (usernameDetected && passwordDetected) {
-            AutofillSaveWorkflow.COMPLETE
-        } else {
-            AutofillSaveWorkflow.DELAY
-        }
+        if (usernameDetected && passwordDetected) AutofillSaveWorkflow.COMPLETE
+        else AutofillSaveWorkflow.DELAY
 
     fun sameTarget(left: AutofillForm, right: AutofillForm): Boolean {
         val leftDomain = AutofillDomainPolicy.normalizeHost(left.webDomain)
@@ -150,10 +147,7 @@ internal object AutofillFieldPolicy {
             add(hintText?.toString())
             add(contentDescription?.toString())
             addAll(additionalDescriptors)
-        }
-            .filterNotNull()
-            .joinToString(" ")
-            .lowercase(Locale.ROOT)
+        }.filterNotNull().joinToString(" ").lowercase(Locale.ROOT)
         if (passwordDescriptor.containsMatchIn(descriptor)) return AutofillFieldKind.PASSWORD
         if (usernameDescriptor.containsMatchIn(descriptor)) return AutofillFieldKind.USERNAME
         return null
@@ -203,17 +197,13 @@ internal object AutofillUsernameFallbackPolicy {
         if (candidates.size == 1) {
             return scored.single().takeIf { it.second > BLOCKED_SCORE }?.first
         }
-
         val bestScore = scored.maxOf { it.second }
         if (bestScore < MULTI_CANDIDATE_MIN_SCORE) return null
-        val best = scored.filter { it.second == bestScore }
-        return best.singleOrNull()?.first
+        return scored.filter { it.second == bestScore }.singleOrNull()?.first
     }
 
     fun score(candidate: AutofillUsernameCandidateSignals): Int {
-        val descriptor = candidate.descriptors
-            .joinToString(" ")
-            .lowercase(Locale.ROOT)
+        val descriptor = candidate.descriptors.joinToString(" ").lowercase(Locale.ROOT)
         if (excludedDescriptor.containsMatchIn(descriptor)) return BLOCKED_SCORE
 
         val normalizedHints = candidate.autofillHints.map(::normalizeToken)
@@ -231,14 +221,9 @@ internal object AutofillUsernameFallbackPolicy {
                 InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
                 InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS,
             )
-        ) {
-            score += 170
-        }
+        ) score += 170
 
-        if (
-            phoneValue.matches(trimmedValue) &&
-            phoneDescriptor.containsMatchIn(descriptor)
-        ) {
+        if (phoneValue.matches(trimmedValue) && phoneDescriptor.containsMatchIn(descriptor)) {
             score += 140
         }
         if (normalizedHints.any(phoneHints::contains)) score += 130
@@ -286,10 +271,9 @@ internal object AutofillPasswordCandidatePolicy {
         val primaryValue = candidates[primaryIndex].value
             ?.takeIf(String::isNotEmpty)
             ?: return null
-        val matching = candidates.indices.filter { index ->
+        return candidates.indices.filter { index ->
             index != primaryIndex && candidates[index].value == primaryValue
-        }
-        return matching.singleOrNull()
+        }.singleOrNull()
     }
 
     fun isConfirmation(candidate: AutofillPasswordCandidateSignals): Boolean {
@@ -342,14 +326,12 @@ internal object AutofillSubmitPolicy {
 
         val normalizedTag = normalizeToken(htmlTag.orEmpty())
         val normalizedRole = normalizeToken(attributes["role"].orEmpty())
-        val normalizedClass = className
-            ?.toString()
-            ?.lowercase(Locale.ROOT)
-            .orEmpty()
+        val normalizedClass = className?.toString()?.lowercase(Locale.ROOT).orEmpty()
         val isButton = normalizedTag == "button" ||
             normalizedRole == "button" ||
             normalizedClass.endsWith("button") ||
             normalizedClass.contains(".button")
+        val isActionInput = normalizedTag == "input" && htmlType in setOf("button", "image")
 
         val descriptor = buildList {
             add(text?.toString())
@@ -357,12 +339,9 @@ internal object AutofillSubmitPolicy {
             add(idEntry)
             add(attributes["value"])
             add(attributes["aria-label"])
-        }
-            .filterNotNull()
-            .joinToString(" ")
-            .lowercase(Locale.ROOT)
+        }.filterNotNull().joinToString(" ").lowercase(Locale.ROOT)
         val hasSubmitMeaning = actionDescriptor.containsMatchIn(descriptor)
-        return hasSubmitMeaning && (isButton || clickable)
+        return hasSubmitMeaning && (isButton || (clickable && isActionInput))
     }
 
     private fun normalizeToken(value: String): String = value
@@ -431,9 +410,7 @@ internal object AssistStructureParser {
                 autofillIdCount += 1
 
                 val htmlInfo = node.htmlInfo
-                val htmlAttributes = htmlInfo
-                    ?.attributes
-                    .orEmpty()
+                val htmlAttributes = htmlInfo?.attributes.orEmpty()
                     .filter { attribute ->
                         attribute.first.lowercase(Locale.ROOT) in safeHtmlAttributes
                     }
@@ -449,9 +426,7 @@ internal object AssistStructureParser {
                         idEntry = node.idEntry,
                         clickable = node.isClickable,
                     )
-                ) {
-                    submitId = id
-                }
+                ) submitId = id
 
                 val htmlDescriptors = htmlAttributes.map { attribute ->
                     "${attribute.first} ${attribute.second}"
@@ -462,15 +437,16 @@ internal object AssistStructureParser {
                     add(node.contentDescription?.toString())
                     addAll(htmlDescriptors)
                 }.filterNotNull()
-                val kind = AutofillFieldPolicy.classify(
-                    autofillHints = node.autofillHints,
-                    inputType = node.inputType,
-                    idEntry = node.idEntry,
-                    hintText = node.hint,
-                    contentDescription = node.contentDescription,
-                    additionalDescriptors = htmlDescriptors,
-                )
-                when (kind) {
+                when (
+                    AutofillFieldPolicy.classify(
+                        autofillHints = node.autofillHints,
+                        inputType = node.inputType,
+                        idEntry = node.idEntry,
+                        hintText = node.hint,
+                        contentDescription = node.contentDescription,
+                        additionalDescriptors = htmlDescriptors,
+                    )
+                ) {
                     AutofillFieldKind.USERNAME -> usernameId = usernameId ?: id
                     AutofillFieldKind.PASSWORD -> passwordFields += ParsedPasswordCandidate(
                         id = id,
@@ -502,11 +478,10 @@ internal object AssistStructureParser {
             }
         }
 
-        val primaryPasswordIndex = AutofillPasswordCandidatePolicy.primaryIndex(
-            passwordFields.map(ParsedPasswordCandidate::signals),
-        )
+        val passwordSignals = passwordFields.map(ParsedPasswordCandidate::signals)
+        val primaryPasswordIndex = AutofillPasswordCandidatePolicy.primaryIndex(passwordSignals)
         val confirmationPasswordIndex = AutofillPasswordCandidatePolicy.confirmationIndex(
-            candidates = passwordFields.map(ParsedPasswordCandidate::signals),
+            candidates = passwordSignals,
             primaryIndex = primaryPasswordIndex,
         )
         val passwordId = primaryPasswordIndex?.let { passwordFields[it].id }
@@ -520,18 +495,14 @@ internal object AssistStructureParser {
         }
 
         val resolvedPackage = packageName.orEmpty()
-        val form = if (usernameId == null && passwordId == null) {
-            null
-        } else {
-            AutofillForm(
-                usernameId = usernameId,
-                passwordId = passwordId,
-                confirmationPasswordId = confirmationPasswordId,
-                submitId = submitId,
-                webDomain = webDomain,
-                packageName = resolvedPackage,
-            )
-        }
+        val form = if (usernameId == null && passwordId == null) null else AutofillForm(
+            usernameId = usernameId,
+            passwordId = passwordId,
+            confirmationPasswordId = confirmationPasswordId,
+            submitId = submitId,
+            webDomain = webDomain,
+            packageName = resolvedPackage,
+        )
 
         return AutofillParseResult(
             form = form,
