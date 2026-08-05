@@ -16,6 +16,8 @@ internal data class AutofillDiagnostic(
     val passwordDetected: Boolean,
     val webDomainDetected: Boolean,
     val outcome: String,
+    val saveTimestampMillis: Long = 0L,
+    val saveOutcome: String? = null,
 ) {
     fun asReport(): String = buildString {
         appendLine("Czas: ${formatTimestamp(timestampMillis)}")
@@ -27,8 +29,14 @@ internal data class AutofillDiagnostic(
         appendLine("Login rozpoznany: ${yesNo(usernameDetected)}")
         appendLine("Hasło rozpoznane: ${yesNo(passwordDetected)}")
         appendLine("Domena WWW: ${yesNo(webDomainDetected)}")
-        append("Wynik: $outcome")
-    }
+        appendLine("Wynik: $outcome")
+        saveOutcome?.let { value ->
+            appendLine()
+            appendLine(
+                "Wynik zapisu (${formatTimestamp(saveTimestampMillis)}): $value",
+            )
+        }
+    }.trimEnd()
 
     companion object {
         private fun yesNo(value: Boolean): String = if (value) "tak" else "nie"
@@ -50,6 +58,8 @@ internal object AutofillDiagnosticStore {
     private const val KEY_PASSWORD = "password"
     private const val KEY_WEB_DOMAIN = "web_domain"
     private const val KEY_OUTCOME = "outcome"
+    private const val KEY_SAVE_TIMESTAMP = "save_timestamp"
+    private const val KEY_SAVE_OUTCOME = "save_outcome"
 
     fun save(context: Context, value: AutofillDiagnostic) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -64,6 +74,14 @@ internal object AutofillDiagnosticStore {
             .putBoolean(KEY_PASSWORD, value.passwordDetected)
             .putBoolean(KEY_WEB_DOMAIN, value.webDomainDetected)
             .putString(KEY_OUTCOME, value.outcome)
+            .apply()
+    }
+
+    fun saveSaveOutcome(context: Context, outcome: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putLong(KEY_SAVE_TIMESTAMP, System.currentTimeMillis())
+            .putString(KEY_SAVE_OUTCOME, outcome)
             .apply()
     }
 
@@ -82,6 +100,8 @@ internal object AutofillDiagnosticStore {
             passwordDetected = preferences.getBoolean(KEY_PASSWORD, false),
             webDomainDetected = preferences.getBoolean(KEY_WEB_DOMAIN, false),
             outcome = preferences.getString(KEY_OUTCOME, "brak").orEmpty(),
+            saveTimestampMillis = preferences.getLong(KEY_SAVE_TIMESTAMP, 0L),
+            saveOutcome = preferences.getString(KEY_SAVE_OUTCOME, null),
         )
     }
 }
