@@ -3,6 +3,7 @@ package com.blackserv.passwdgen
 import android.app.PendingIntent
 import android.content.Intent
 import android.os.Build
+import android.os.Bundle
 import android.os.CancellationSignal
 import android.service.autofill.AutofillService
 import android.service.autofill.Dataset
@@ -14,6 +15,7 @@ import android.service.autofill.SaveCallback
 import android.service.autofill.SaveInfo
 import android.service.autofill.SaveRequest
 import android.widget.RemoteViews
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 
 class PasswdGenAutofillService : AutofillService() {
@@ -32,7 +34,8 @@ class PasswdGenAutofillService : AutofillService() {
         val contexts = request.fillContexts
         val structure = contexts.lastOrNull()?.structure
         if (structure == null) {
-            saveEmptyDiagnostic("Android nie przekazał struktury formularza")
+            val session = resolveSessionState(request.clientState, "nieustalony")
+            saveEmptyDiagnostic("Android nie przekazał struktury formularza", session)
             callback.onSuccess(null)
             return
         }
@@ -44,7 +47,13 @@ class PasswdGenAutofillService : AutofillService() {
         val form = analysis.form
         val ids = listOfNotNull(form?.usernameId, form?.passwordId).distinct()
         if (form == null || ids.isEmpty()) {
-            saveDiagnostic(analysis.stats, "Brak rozpoznanych pól loginu lub hasła")
+            val targetKey = analysis.stats.packageName.ifBlank { "nieustalony" }
+            val session = resolveSessionState(request.clientState, targetKey)
+            saveDiagnostic(
+                analysis.stats,
+                "Brak rozpoznanych pól loginu lub hasła",
+                session,
+            )
             callback.onSuccess(null)
             return
         }
@@ -60,19 +69,23 @@ class PasswdGenAutofillService : AutofillService() {
 
         val targetLabel: String
         val targetDetail: String
+        val targetKey: String
         val domain = form.webDomain
         if (domain != null) {
             authenticationIntent.putExtra(AutofillAuthActivity.EXTRA_WEB_DOMAIN, domain)
             targetLabel = "Odblokuj PasswdGen"
             targetDetail = domain
-            saveDiagnostic(
-                analysis.stats,
-                diagnosticOutcome("formularz WWW", form, sessionForm),
-            )
+            targetKey = domain
         } else {
             val identity = NativeAppIdentityResolver.resolve(this, form.packageName)
             if (identity == null) {
-                saveDiagnostic(analysis.stats, "Nie udało się zweryfikować aplikacji")
+                val unresolvedTarget = "app:${form.packageName.ifBlank { "nieustalona" }}"
+                val session = resolveSessionState(request.clientState, unresolvedTarget)
+                saveDiagnostic(
+                    analysis.stats,
+                    "Nie udało się zweryfikować aplikacji",
+                    session,
+                )
                 callback.onSuccess(null)
                 return
             }
@@ -82,11 +95,19 @@ class PasswdGenAutofillService : AutofillService() {
             )
             targetLabel = "Odblokuj PasswdGen"
             targetDetail = identity.appLabel
-            saveDiagnostic(
-                analysis.stats,
-                diagnosticOutcome("aplikacja natywna", form, sessionForm),
-            )
+            targetKey = "app:${identity.packageName}"
         }
+
+        val session = resolveSessionState(request.clientState, targetKey)
+        saveDiagnostic(
+            analysis.stats,
+            diagnosticOutcome(
+                targetType = if (domain != null) "formularz WWW" else "aplikacja natywna",
+                current = form,
+                session = sessionForm,
+            ),
+            session,
+        )
 
         val pendingIntent = PendingIntent.getActivity(
             this,
@@ -108,21 +129,23 @@ class PasswdGenAutofillService : AutofillService() {
 
         val response = FillResponse.Builder()
             .addDataset(lockedDataset)
+            .setClientState(session.toBundle())
         buildSaveInfo(sessionForm)?.let(response::setSaveInfo)
         callback.onSuccess(response.build())
     }
 
     override fun onSaveRequest(request: SaveRequest, callback: SaveCallback) {
-        AutofillDiagnosticStore.saveSaveOutcome(
-            this,
+        val session = readSessionState(request.clientState)
+        saveSessionOutcome(
+            session,
             "Android wywołał zapis po zaakceptowaniu systemowego monitu.",
         )
         val captured = AutofillSaveExtractor.extract(
             request.fillContexts.map { context -> context.structure },
         )
         if (captured == null) {
-            AutofillDiagnosticStore.saveSaveOutcome(
-                this,
+            saveSessionOutcome(
+                session,
                 "Żądanie zapisu dotarło, ale nie udało się odczytać kompletnego loginu i hasła.",
             )
             callback.onFailure("Nie udało się bezpiecznie odczytać loginu i hasła z formularza.")
@@ -132,8 +155,8 @@ class PasswdGenAutofillService : AutofillService() {
         val target = captured.webDomain?.let(AutofillSaveTarget::Web) ?: run {
             val identity = NativeAppIdentityResolver.resolve(this, captured.packageName)
             if (identity == null) {
-                AutofillDiagnosticStore.saveSaveOutcome(
-                    this,
+                saveSessionOutcome(
+                    session,
                     "Żądanie zapisu dotarło, ale weryfikacja aplikacji nie powiodła się.",
                 )
                 callback.onFailure("Nie udało się zweryfikować aplikacji przed zapisem.")
@@ -160,16 +183,16 @@ class PasswdGenAutofillService : AutofillService() {
 
         runCatching { startActivity(saveIntent) }
             .onSuccess {
-                AutofillDiagnosticStore.saveSaveOutcome(
-                    this,
+                saveSessionOutcome(
+                    session,
                     "Systemowy monit zaakceptowany; otwarto bezpieczne potwierdzenie PasswdGen.",
                 )
                 callback.onSuccess()
             }
             .onFailure {
                 PendingAutofillSaveStore.remove(token)
-                AutofillDiagnosticStore.saveSaveOutcome(
-                    this,
+                saveSessionOutcome(
+                    session,
                     "Systemowy monit zaakceptowany, ale nie udało się otworzyć potwierdzenia PasswdGen.",
                 )
                 callback.onFailure("Nie udało się otworzyć bezpiecznego potwierdzenia zapisu.")
@@ -192,25 +215,29 @@ class PasswdGenAutofillService : AutofillService() {
             AutofillSaveWorkflow.DELAY -> SaveInfo.FLAG_DELAY_SAVE
             AutofillSaveWorkflow.COMPLETE -> SaveInfo.FLAG_SAVE_ON_ALL_VIEWS_INVISIBLE
         }
-        return SaveInfo.Builder(dataType, requiredIds.toTypedArray())
+        val builder = SaveInfo.Builder(dataType, requiredIds.toTypedArray())
             .setDescription("Zapisz nowe dane lub zaktualizuj hasło w PasswdGen")
             .setFlags(flags)
-            .apply {
-                if (workflow == AutofillSaveWorkflow.COMPLETE) {
-                    form.submitId?.let(::setTriggerId)
-                }
-            }
-            .build()
+
+        val optionalIds = listOfNotNull(form.confirmationPasswordId)
+            .filterNot(requiredIds::contains)
+            .distinct()
+        if (optionalIds.isNotEmpty()) builder.setOptionalIds(optionalIds.toTypedArray())
+        if (workflow == AutofillSaveWorkflow.COMPLETE) {
+            form.submitId?.let(builder::setTriggerId)
+        }
+        return builder.build()
     }
 
     @Suppress("DEPRECATION")
     private fun capturePreviousSaveUiOutcome() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-        val events = runCatching { fillEventHistory?.events.orEmpty() }
-            .getOrElse { return }
+        val history = runCatching { fillEventHistory }.getOrNull() ?: return
+        val session = readSessionState(history.clientState) ?: return
+        val events = history.events.orEmpty()
         if (events.any { event -> event.type == FillEventHistory.Event.TYPE_SAVE_SHOWN }) {
-            AutofillDiagnosticStore.saveSaveOutcome(
-                this,
+            saveSessionOutcome(
+                session,
                 "Android wyświetlił systemowy monit zapisu.",
             )
             return
@@ -246,7 +273,7 @@ class PasswdGenAutofillService : AutofillService() {
 
             else -> "Monit zapisu nie został pokazany; nieznany kod systemowy ${committed.noSaveUiReason}."
         }
-        AutofillDiagnosticStore.saveSaveOutcome(this, outcome)
+        saveSessionOutcome(session, outcome)
     }
 
     private fun diagnosticOutcome(
@@ -258,6 +285,7 @@ class PasswdGenAutofillService : AutofillService() {
         append("; bieżący etap ${fieldModeLabel(current.usernameId != null, current.passwordId != null)}")
         append("; sesja ${fieldModeLabel(session.usernameId != null, session.passwordId != null)}")
         append("; konteksty ${session.contextCount}")
+        append("; powtórzenie hasła ${yesNo(session.confirmationPasswordId != null)}")
         append("; przycisk zatwierdzenia ${yesNo(session.submitId != null)}")
     }
 
@@ -268,9 +296,41 @@ class PasswdGenAutofillService : AutofillService() {
         else -> "brak pól"
     }
 
+    private fun resolveSessionState(clientState: Bundle?, targetKey: String): SessionState {
+        val existing = readSessionState(clientState)
+        return if (existing?.targetKey == targetKey) {
+            existing
+        } else {
+            SessionState(UUID.randomUUID().toString(), targetKey)
+        }
+    }
+
+    private fun readSessionState(clientState: Bundle?): SessionState? {
+        val token = clientState?.getString(CLIENT_STATE_SESSION_TOKEN)
+            ?.takeIf(String::isNotBlank)
+            ?: return null
+        val targetKey = clientState.getString(CLIENT_STATE_TARGET_KEY)
+            ?.takeIf(String::isNotBlank)
+            ?: return null
+        return SessionState(token, targetKey)
+    }
+
+    private fun saveSessionOutcome(session: SessionState?, outcome: String) {
+        AutofillDiagnosticStore.saveSaveOutcome(
+            context = this,
+            sessionToken = session?.token,
+            targetKey = session?.targetKey,
+            outcome = outcome,
+        )
+    }
+
     private fun yesNo(value: Boolean): String = if (value) "tak" else "nie"
 
-    private fun saveDiagnostic(stats: AutofillParseStats, outcome: String) {
+    private fun saveDiagnostic(
+        stats: AutofillParseStats,
+        outcome: String,
+        session: SessionState,
+    ) {
         AutofillDiagnosticStore.save(
             this,
             AutofillDiagnostic(
@@ -284,11 +344,13 @@ class PasswdGenAutofillService : AutofillService() {
                 passwordDetected = stats.passwordDetected,
                 webDomainDetected = stats.webDomainDetected,
                 outcome = outcome,
+                sessionToken = session.token,
+                targetKey = session.targetKey,
             ),
         )
     }
 
-    private fun saveEmptyDiagnostic(outcome: String) {
+    private fun saveEmptyDiagnostic(outcome: String, session: SessionState) {
         AutofillDiagnosticStore.save(
             this,
             AutofillDiagnostic(
@@ -302,12 +364,26 @@ class PasswdGenAutofillService : AutofillService() {
                 passwordDetected = false,
                 webDomainDetected = false,
                 outcome = outcome,
+                sessionToken = session.token,
+                targetKey = session.targetKey,
             ),
         )
     }
 
+    private data class SessionState(
+        val token: String,
+        val targetKey: String,
+    ) {
+        fun toBundle(): Bundle = Bundle().apply {
+            putString(CLIENT_STATE_SESSION_TOKEN, token)
+            putString(CLIENT_STATE_TARGET_KEY, targetKey)
+        }
+    }
+
     private companion object {
         const val NO_SAVE_UI_REASON_USING_CREDMAN = 7
+        const val CLIENT_STATE_SESSION_TOKEN = "passwdgen.autofill.session_token"
+        const val CLIENT_STATE_TARGET_KEY = "passwdgen.autofill.target_key"
         val REQUEST_CODE = AtomicInteger(10_000)
     }
 }
