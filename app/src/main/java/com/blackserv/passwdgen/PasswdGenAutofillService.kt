@@ -9,6 +9,7 @@ import android.service.autofill.FillCallback
 import android.service.autofill.FillRequest
 import android.service.autofill.FillResponse
 import android.service.autofill.SaveCallback
+import android.service.autofill.SaveInfo
 import android.service.autofill.SaveRequest
 import android.widget.RemoteViews
 import java.util.concurrent.atomic.AtomicInteger
@@ -86,17 +87,67 @@ class PasswdGenAutofillService : AutofillService() {
             setAuthentication(pendingIntent.intentSender)
         }.build()
 
-        callback.onSuccess(
-            FillResponse.Builder()
-                .addDataset(lockedDataset)
-                .build(),
-        )
+        val response = FillResponse.Builder()
+            .addDataset(lockedDataset)
+        buildSaveInfo(form)?.let(response::setSaveInfo)
+        callback.onSuccess(response.build())
     }
 
     override fun onSaveRequest(request: SaveRequest, callback: SaveCallback) {
-        // Zapisywanie nowych haseł przez system zostanie włączone po fizycznym teście
-        // bezpiecznego wypełniania w aplikacjach natywnych.
-        callback.onSuccess()
+        val captured = AutofillSaveExtractor.extract(
+            request.fillContexts.map { context -> context.structure },
+        )
+        if (captured == null) {
+            callback.onFailure("Nie udało się bezpiecznie odczytać loginu i hasła z formularza.")
+            return
+        }
+
+        val target = captured.webDomain?.let(AutofillSaveTarget::Web) ?: run {
+            val identity = NativeAppIdentityResolver.resolve(this, captured.packageName)
+            if (identity == null) {
+                callback.onFailure("Nie udało się zweryfikować aplikacji przed zapisem.")
+                return
+            }
+            AutofillSaveTarget.Native(identity)
+        }
+
+        val token = PendingAutofillSaveStore.put(
+            PendingAutofillSave(
+                target = target,
+                username = captured.username,
+                password = captured.password,
+            ),
+        )
+        val saveIntent = Intent(this, AutofillSaveActivity::class.java).apply {
+            putExtra(AutofillSaveActivity.EXTRA_TOKEN, token)
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_NO_HISTORY or
+                    Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS,
+            )
+        }
+
+        runCatching { startActivity(saveIntent) }
+            .onSuccess { callback.onSuccess() }
+            .onFailure {
+                PendingAutofillSaveStore.remove(token)
+                callback.onFailure("Nie udało się otworzyć bezpiecznego potwierdzenia zapisu.")
+            }
+    }
+
+    private fun buildSaveInfo(form: AutofillForm): SaveInfo? {
+        val passwordId = form.passwordId ?: return null
+        val builder = SaveInfo.Builder(
+            SaveInfo.SAVE_DATA_TYPE_PASSWORD or SaveInfo.SAVE_DATA_TYPE_USERNAME,
+            arrayOf(passwordId),
+        )
+            .setDescription("Zapisz nowe dane lub zaktualizuj hasło w PasswdGen")
+            .setFlags(SaveInfo.FLAG_SAVE_ON_ALL_VIEWS_INVISIBLE)
+
+        form.usernameId
+            ?.takeIf { it != passwordId }
+            ?.let { builder.setOptionalIds(arrayOf(it)) }
+        return builder.build()
     }
 
     private fun saveDiagnostic(stats: AutofillParseStats, outcome: String) {
