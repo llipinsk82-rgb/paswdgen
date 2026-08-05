@@ -73,6 +73,58 @@ class AutofillPolicyTest {
     }
 
     @Test
+    fun `detects explicit html submit controls`() {
+        assertTrue(
+            AutofillSubmitPolicy.isSubmitCandidate(
+                htmlTag = "input",
+                htmlAttributes = listOf("type" to "submit", "value" to "Create account"),
+                className = "android.view.View",
+                text = null,
+                contentDescription = null,
+                idEntry = "register",
+                clickable = true,
+            ),
+        )
+        assertTrue(
+            AutofillSubmitPolicy.isSubmitCandidate(
+                htmlTag = "button",
+                htmlAttributes = listOf("role" to "button"),
+                className = "android.widget.Button",
+                text = "Sign up",
+                contentDescription = null,
+                idEntry = null,
+                clickable = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `does not treat credential text fields or unrelated buttons as submit controls`() {
+        assertFalse(
+            AutofillSubmitPolicy.isSubmitCandidate(
+                htmlTag = "input",
+                htmlAttributes = listOf("type" to "text"),
+                className = "android.widget.EditText",
+                text = null,
+                contentDescription = null,
+                idEntry = "login",
+                clickable = true,
+            ),
+        )
+        assertFalse(
+            AutofillSubmitPolicy.isSubmitCandidate(
+                htmlTag = "button",
+                htmlAttributes = emptyList(),
+                className = "android.widget.Button",
+                text = "Cancel",
+                contentDescription = null,
+                idEntry = null,
+                clickable = true,
+            ),
+        )
+    }
+
+    @Test
     fun `autofill only matches exact normalized host`() {
         assertTrue(AutofillDomainPolicy.matches("https://www.example.com/login", "example.com"))
         assertFalse(AutofillDomainPolicy.matches("login.example.com", "example.com"))
