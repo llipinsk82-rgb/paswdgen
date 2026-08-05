@@ -30,10 +30,16 @@ internal data class CapturedAutofillCredential(
     val packageName: String,
 )
 
+internal object AutofillPasswordConfirmationPolicy {
+    fun isConsistent(password: String, confirmationPassword: String?): Boolean =
+        confirmationPassword.isNullOrEmpty() || password == confirmationPassword
+}
+
 internal object AutofillSaveExtractor {
     fun extract(structures: List<AssistStructure>): CapturedAutofillCredential? {
         var username: String? = null
         var password: String? = null
+        var confirmationPassword: String? = null
         var webDomain: String? = null
         var packageName: String? = null
 
@@ -46,10 +52,21 @@ internal object AutofillSaveExtractor {
                 ?.takeIf(String::isNotBlank)
             password = password ?: findTextValue(structure, form.passwordId)
                 ?.takeIf(String::isNotEmpty)
+            confirmationPassword = confirmationPassword ?: findTextValue(
+                structure,
+                form.confirmationPasswordId,
+            )?.takeIf(String::isNotEmpty)
         }
 
         val safeUsername = username?.takeIf { it.length <= MAX_USERNAME_LENGTH } ?: return null
         val safePassword = password?.takeIf { it.length <= MAX_PASSWORD_LENGTH } ?: return null
+        val safeConfirmation = confirmationPassword
+            ?.takeIf { it.length <= MAX_PASSWORD_LENGTH }
+            ?: confirmationPassword?.let { return null }
+        if (!AutofillPasswordConfirmationPolicy.isConsistent(safePassword, safeConfirmation)) {
+            return null
+        }
+
         return CapturedAutofillCredential(
             username = safeUsername,
             password = safePassword,
