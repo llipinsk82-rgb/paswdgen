@@ -146,9 +146,9 @@ class PasswdGenAutofillService : AutofillService() {
         if (captured == null) {
             saveSessionOutcome(
                 session,
-                "Żądanie zapisu dotarło, ale nie udało się odczytać kompletnego loginu i hasła.",
+                "Żądanie zapisu dotarło, ale nie znaleziono jednoznacznego loginu i hasła.",
             )
-            callback.onFailure("Nie udało się bezpiecznie odczytać loginu i hasła z formularza.")
+            callback.onFailure("Nie udało się bezpiecznie ustalić jednoznacznego loginu i hasła.")
             return
         }
 
@@ -204,13 +204,18 @@ class PasswdGenAutofillService : AutofillService() {
         if (requiredIds.isEmpty()) return null
 
         var dataType = 0
-        if (form.usernameId != null) dataType = dataType or SaveInfo.SAVE_DATA_TYPE_USERNAME
-        if (form.passwordId != null) dataType = dataType or SaveInfo.SAVE_DATA_TYPE_PASSWORD
+        if (form.passwordId != null) {
+            dataType = dataType or SaveInfo.SAVE_DATA_TYPE_USERNAME
+            dataType = dataType or SaveInfo.SAVE_DATA_TYPE_PASSWORD
+        } else if (form.usernameId != null) {
+            dataType = dataType or SaveInfo.SAVE_DATA_TYPE_USERNAME
+        }
 
-        val workflow = AutofillSessionPolicy.workflow(
-            usernameDetected = form.usernameId != null,
-            passwordDetected = form.passwordId != null,
-        )
+        val workflow = if (form.passwordId != null) {
+            AutofillSaveWorkflow.COMPLETE
+        } else {
+            AutofillSaveWorkflow.DELAY
+        }
         val flags = when (workflow) {
             AutofillSaveWorkflow.DELAY -> SaveInfo.FLAG_DELAY_SAVE
             AutofillSaveWorkflow.COMPLETE -> SaveInfo.FLAG_SAVE_ON_ALL_VIEWS_INVISIBLE
@@ -286,6 +291,7 @@ class PasswdGenAutofillService : AutofillService() {
         append("; sesja ${fieldModeLabel(session.usernameId != null, session.passwordId != null)}")
         append("; konteksty ${session.contextCount}")
         append("; powtórzenie hasła ${yesNo(session.confirmationPasswordId != null)}")
+        append("; odzyskanie loginu przy zapisie ${yesNo(session.passwordId != null && session.usernameId == null)}")
         append("; przycisk zatwierdzenia ${yesNo(session.submitId != null)}")
     }
 
