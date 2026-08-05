@@ -22,6 +22,54 @@ internal data class AutofillForm(
         get() = webDomain ?: packageName
 }
 
+internal data class AutofillSessionForm(
+    val usernameId: AutofillId?,
+    val passwordId: AutofillId?,
+    val submitId: AutofillId?,
+    val webDomain: String?,
+    val packageName: String,
+    val contextCount: Int,
+) {
+    val isComplete: Boolean
+        get() = usernameId != null && passwordId != null
+}
+
+internal enum class AutofillSaveWorkflow {
+    DELAY,
+    COMPLETE,
+}
+
+internal object AutofillSessionPolicy {
+    fun merge(forms: List<AutofillForm>, current: AutofillForm): AutofillSessionForm {
+        val matching = forms.filter { form -> sameTarget(form, current) }
+        val newestFirst = matching.asReversed()
+        return AutofillSessionForm(
+            usernameId = newestFirst.firstNotNullOfOrNull(AutofillForm::usernameId),
+            passwordId = newestFirst.firstNotNullOfOrNull(AutofillForm::passwordId),
+            submitId = current.submitId,
+            webDomain = current.webDomain,
+            packageName = current.packageName,
+            contextCount = matching.size.coerceAtLeast(1),
+        )
+    }
+
+    fun workflow(usernameDetected: Boolean, passwordDetected: Boolean): AutofillSaveWorkflow =
+        if (usernameDetected && passwordDetected) {
+            AutofillSaveWorkflow.COMPLETE
+        } else {
+            AutofillSaveWorkflow.DELAY
+        }
+
+    fun sameTarget(left: AutofillForm, right: AutofillForm): Boolean {
+        val leftDomain = AutofillDomainPolicy.normalizeHost(left.webDomain)
+        val rightDomain = AutofillDomainPolicy.normalizeHost(right.webDomain)
+        if (leftDomain != null || rightDomain != null) {
+            return leftDomain != null && leftDomain == rightDomain
+        }
+        return left.packageName.isNotBlank() && left.packageName == right.packageName
+    }
+}
+
 internal data class AutofillParseStats(
     val packageName: String,
     val windowCount: Int,
