@@ -1,7 +1,10 @@
 package com.blackserv.passwdgen
 
 import android.app.assist.AssistStructure
+import android.text.InputType
+import android.view.View
 import android.view.autofill.AutofillId
+import java.util.Locale
 import java.util.UUID
 
 internal sealed interface AutofillSaveTarget {
@@ -35,29 +38,68 @@ internal object AutofillPasswordConfirmationPolicy {
         confirmationPassword.isNullOrEmpty() || password == confirmationPassword
 }
 
+internal object AutofillSaveUsernamePolicy {
+    fun selectValue(candidates: List<AutofillUsernameCandidateSignals>): String? {
+        val unique = candidates
+            .mapNotNull { candidate ->
+                val value = candidate.value?.trim()?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+                candidate.copy(value = value)
+            }
+            .distinctBy { candidate -> candidate.value.orEmpty().lowercase(Locale.ROOT) }
+        if (unique.isEmpty()) return null
+
+        val scored = unique.mapIndexed { index, candidate ->
+            index to AutofillUsernameFallbackPolicy.score(candidate)
+        }
+        val bestScore = scored.maxOf { it.second }
+        if (bestScore < MIN_SAVE_USERNAME_SCORE) return null
+        val bestIndex = scored.filter { it.second == bestScore }.singleOrNull()?.first ?: return null
+        return unique[bestIndex].value
+    }
+
+    private const val MIN_SAVE_USERNAME_SCORE = 100
+}
+
 internal object AutofillSaveExtractor {
+    private val safeHtmlAttributes = setOf(
+        "autocomplete",
+        "name",
+        "id",
+        "type",
+        "placeholder",
+        "aria-label",
+        "inputmode",
+    )
+
     fun extract(structures: List<AssistStructure>): CapturedAutofillCredential? {
         var username: String? = null
         var password: String? = null
         var confirmationPassword: String? = null
         var webDomain: String? = null
         var packageName: String? = null
+        val fallbackUsernameCandidates = mutableListOf<AutofillUsernameCandidateSignals>()
 
         structures.asReversed().forEach { structure ->
-            val form = AssistStructureParser.parse(structure) ?: return@forEach
-            webDomain = webDomain ?: form.webDomain
-            packageName = packageName ?: form.packageName.takeIf(String::isNotBlank)
-            username = username ?: findTextValue(structure, form.usernameId)
-                ?.trim()
-                ?.takeIf(String::isNotBlank)
-            password = password ?: findTextValue(structure, form.passwordId)
-                ?.takeIf(String::isNotEmpty)
-            confirmationPassword = confirmationPassword ?: findTextValue(
-                structure,
-                form.confirmationPasswordId,
-            )?.takeIf(String::isNotEmpty)
+            val form = AssistStructureParser.parse(structure)
+            if (form != null) {
+                webDomain = webDomain ?: form.webDomain
+                packageName = packageName ?: form.packageName.takeIf(String::isNotBlank)
+                username = username ?: findTextValue(structure, form.usernameId)
+                    ?.trim()
+                    ?.takeIf(String::isNotBlank)
+                password = password ?: findTextValue(structure, form.passwordId)
+                    ?.takeIf(String::isNotEmpty)
+                confirmationPassword = confirmationPassword ?: findTextValue(
+                    structure,
+                    form.confirmationPasswordId,
+                )?.takeIf(String::isNotEmpty)
+            }
+            if (username == null) {
+                fallbackUsernameCandidates += collectUsernameCandidates(structure)
+            }
         }
 
+        username = username ?: AutofillSaveUsernamePolicy.selectValue(fallbackUsernameCandidates)
         val safeUsername = username?.takeIf { it.length <= MAX_USERNAME_LENGTH } ?: return null
         val safePassword = password?.takeIf { it.length <= MAX_PASSWORD_LENGTH } ?: return null
         val safeConfirmation = confirmationPassword
@@ -75,6 +117,53 @@ internal object AutofillSaveExtractor {
         )
     }
 
+    private fun collectUsernameCandidates(
+        structure: AssistStructure,
+    ): List<AutofillUsernameCandidateSignals> = buildList {
+        for (windowIndex in 0 until structure.windowNodeCount) {
+            walk(structure.getWindowNodeAt(windowIndex).rootViewNode) { node ->
+                val value = textValue(node)?.trim()?.takeIf(String::isNotBlank) ?: return@walk
+                val inputClass = node.inputType and InputType.TYPE_MASK_CLASS
+                val textCandidate = node.autofillType == View.AUTOFILL_TYPE_TEXT ||
+                    inputClass == InputType.TYPE_CLASS_TEXT ||
+                    inputClass == InputType.TYPE_CLASS_NUMBER
+                if (!textCandidate) return@walk
+
+                val htmlDescriptors = node.htmlInfo
+                    ?.attributes
+                    .orEmpty()
+                    .filter { attribute ->
+                        attribute.first.lowercase(Locale.ROOT) in safeHtmlAttributes
+                    }
+                    .map { attribute -> "${attribute.first} ${attribute.second}" }
+                val kind = AutofillFieldPolicy.classify(
+                    autofillHints = node.autofillHints,
+                    inputType = node.inputType,
+                    idEntry = node.idEntry,
+                    hintText = node.hint,
+                    contentDescription = node.contentDescription,
+                    additionalDescriptors = htmlDescriptors,
+                )
+                if (kind == AutofillFieldKind.PASSWORD) return@walk
+
+                val descriptors = buildList {
+                    add(node.idEntry)
+                    add(node.hint?.toString())
+                    add(node.contentDescription?.toString())
+                    addAll(htmlDescriptors)
+                }.filterNotNull()
+                add(
+                    AutofillUsernameCandidateSignals(
+                        descriptors = descriptors,
+                        inputType = node.inputType,
+                        autofillHints = node.autofillHints.orEmpty().toList(),
+                        value = value,
+                    ),
+                )
+            }
+        }
+    }
+
     private fun findTextValue(structure: AssistStructure, id: AutofillId?): String? {
         if (id == null) return null
         for (windowIndex in 0 until structure.windowNodeCount) {
@@ -85,14 +174,24 @@ internal object AutofillSaveExtractor {
     }
 
     private fun findTextValue(node: AssistStructure.ViewNode, id: AutofillId): String? {
-        if (node.autofillId == id) {
-            val value = node.autofillValue
-            if (value != null && value.isText) return value.textValue?.toString()
-        }
+        if (node.autofillId == id) return textValue(node)
         for (index in 0 until node.childCount) {
             findTextValue(node.getChildAt(index), id)?.let { return it }
         }
         return null
+    }
+
+    private fun textValue(node: AssistStructure.ViewNode): String? {
+        val value = node.autofillValue
+        return if (value != null && value.isText) value.textValue?.toString() else null
+    }
+
+    private fun walk(
+        node: AssistStructure.ViewNode,
+        visit: (AssistStructure.ViewNode) -> Unit,
+    ) {
+        visit(node)
+        for (index in 0 until node.childCount) walk(node.getChildAt(index), visit)
     }
 
     private const val MAX_USERNAME_LENGTH = 512
