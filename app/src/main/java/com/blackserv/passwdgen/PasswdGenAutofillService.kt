@@ -14,6 +14,7 @@ import android.service.autofill.FillResponse
 import android.service.autofill.SaveCallback
 import android.service.autofill.SaveInfo
 import android.service.autofill.SaveRequest
+import android.view.autofill.AutofillValue
 import android.widget.RemoteViews
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
@@ -62,6 +63,11 @@ class PasswdGenAutofillService : AutofillService() {
             forms = analyses.mapNotNull(AutofillParseResult::form),
             current = form,
         )
+        val saveForm = sessionForm.copy(
+            submitId = sessionForm.submitId ?: AutofillSpaSubmitPolicy.find(
+                contexts.map { context -> context.structure },
+            ),
+        )
         val authenticationIntent = Intent(this, AutofillAuthActivity::class.java).apply {
             putExtra(AutofillAuthActivity.EXTRA_USERNAME_ID, form.usernameId)
             putExtra(AutofillAuthActivity.EXTRA_PASSWORD_ID, form.passwordId)
@@ -104,7 +110,7 @@ class PasswdGenAutofillService : AutofillService() {
             diagnosticOutcome(
                 targetType = if (domain != null) "formularz WWW" else "aplikacja natywna",
                 current = form,
-                session = sessionForm,
+                session = saveForm,
             ),
             session,
         )
@@ -130,7 +136,8 @@ class PasswdGenAutofillService : AutofillService() {
         val response = FillResponse.Builder()
             .addDataset(lockedDataset)
             .setClientState(session.toBundle())
-        buildSaveInfo(sessionForm)?.let(response::setSaveInfo)
+        buildGeneratedPasswordDataset(form, targetDetail)?.let(response::addDataset)
+        buildSaveInfo(saveForm)?.let(response::setSaveInfo)
         callback.onSuccess(response.build())
     }
 
@@ -197,6 +204,29 @@ class PasswdGenAutofillService : AutofillService() {
                 )
                 callback.onFailure("Nie udało się otworzyć bezpiecznego potwierdzenia zapisu.")
             }
+    }
+
+    private fun buildGeneratedPasswordDataset(
+        form: AutofillForm,
+        targetDetail: String,
+    ): Dataset? {
+        val passwordId = form.passwordId ?: return null
+        val generatedPassword = AutofillGeneratedPasswordPolicy.generate()
+        val presentation = RemoteViews(packageName, R.layout.autofill_presentation).apply {
+            setTextViewText(R.id.autofill_primary, "Wygeneruj silne hasło")
+            setTextViewText(
+                R.id.autofill_secondary,
+                "${AutofillGeneratedPasswordPolicy.LENGTH} znaków • $targetDetail",
+            )
+        }
+        return Dataset.Builder(presentation).apply {
+            val value = AutofillValue.forText(generatedPassword)
+            setValue(passwordId, value, presentation)
+            form.confirmationPasswordId
+                ?.takeIf { confirmationId -> confirmationId != passwordId }
+                ?.let { confirmationId -> setValue(confirmationId, value, presentation) }
+            setId("passwdgen-generated")
+        }.build()
     }
 
     private fun buildSaveInfo(form: AutofillSessionForm): SaveInfo? {
