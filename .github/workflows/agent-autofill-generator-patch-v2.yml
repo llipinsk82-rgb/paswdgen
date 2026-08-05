@@ -1,0 +1,192 @@
+name: Agent Autofill Generator Patch v2
+
+on:
+  push:
+    branches:
+      - agent/android-vault-mvp
+    paths:
+      - .github/workflows/agent-autofill-generator-patch-v2.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: agent-autofill-generator-patch-v2
+  cancel-in-progress: false
+
+jobs:
+  patch-test-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: agent/android-vault-mvp
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager_bin="$(command -v sdkmanager || true)"
+          if [[ -z "${sdkmanager_bin}" ]]; then
+            sdkmanager_bin="$(find "${ANDROID_SDK_ROOT}/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          fi
+          yes | "${sdkmanager_bin}" --licenses >/dev/null || true
+          "${sdkmanager_bin}" --install "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+
+      - name: Apply focused source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}: {old!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          build_text = Path("app/build.gradle.kts").read_text()
+          if '"0.1.13"' not in build_text or "null) 23" not in build_text:
+              raise SystemExit("Source version is no longer 0.1.13 / vc23; refusing stale patch")
+          if Path("app/src/main/java/com/blackserv/passwdgen/AutofillGeneratedPassword.kt").exists():
+              raise SystemExit("Generator policy already exists; refusing duplicate patch")
+
+          support = "app/src/main/java/com/blackserv/passwdgen/AutofillSupport.kt"
+          replace_once(
+              support,
+              "            submitId = current.submitId,",
+              "            submitId = newestFirst.firstNotNullOfOrNull(AutofillForm::submitId),",
+          )
+          replace_once(
+              support,
+              '        return hasSubmitMeaning && (isButton || (clickable && isActionInput))',
+              '        return hasSubmitMeaning && (isButton || isActionInput || clickable)',
+          )
+          replace_once(
+              support,
+              '            add(idEntry)\n            add(attributes["value"])\n            add(attributes["aria-label"])',
+              '            add(idEntry)\n            add(className?.toString())\n            add(attributes["value"])\n            add(attributes["aria-label"])\n            add(attributes["name"])\n            add(attributes["id"])\n            add(attributes["title"])\n            add(attributes["data-testid"])\n            add(attributes["data-test"])\n            add(attributes["data-qa"])',
+          )
+          replace_once(
+              support,
+              '        "inputmode",\n    )',
+              '        "inputmode",\n        "title",\n        "data-testid",\n        "data-test",\n        "data-qa",\n    )',
+          )
+
+          service = "app/src/main/java/com/blackserv/passwdgen/PasswdGenAutofillService.kt"
+          text = Path(service).read_text()
+          anchor = "import android.widget.RemoteViews\n"
+          if text.count(anchor) != 1:
+              raise SystemExit("PasswdGenAutofillService.kt: RemoteViews import anchor missing")
+          Path(service).write_text(
+              text.replace(anchor, anchor + "import android.view.autofill.AutofillValue\n", 1)
+          )
+          replace_once(
+              service,
+              "        val response = FillResponse.Builder()\n            .addDataset(lockedDataset)\n            .setClientState(session.toBundle())\n        buildSaveInfo(sessionForm)?.let(response::setSaveInfo)",
+              "        val response = FillResponse.Builder()\n            .addDataset(lockedDataset)\n            .setClientState(session.toBundle())\n        buildGeneratedPasswordDataset(form, targetDetail)?.let(response::addDataset)\n        buildSaveInfo(sessionForm)?.let(response::setSaveInfo)",
+          )
+          replace_once(
+              service,
+              "    private fun buildSaveInfo(form: AutofillSessionForm): SaveInfo? {",
+              "    private fun buildGeneratedPasswordDataset(\n        form: AutofillForm,\n        targetDetail: String,\n    ): Dataset? {\n        val passwordId = form.passwordId ?: return null\n        val generatedPassword = AutofillGeneratedPasswordPolicy.generate()\n        val presentation = RemoteViews(packageName, R.layout.autofill_presentation).apply {\n            setTextViewText(R.id.autofill_primary, \"Wygeneruj silne hasło\")\n            setTextViewText(\n                R.id.autofill_secondary,\n                \"${AutofillGeneratedPasswordPolicy.LENGTH} znaków • $targetDetail\",\n            )\n        }\n        return Dataset.Builder(presentation).apply {\n            val value = AutofillValue.forText(generatedPassword)\n            setValue(passwordId, value, presentation)\n            form.confirmationPasswordId\n                ?.takeIf { confirmationId -> confirmationId != passwordId }\n                ?.let { confirmationId -> setValue(confirmationId, value, presentation) }\n            setId(\"passwdgen-generated\")\n        }.build()\n    }\n\n    private fun buildSaveInfo(form: AutofillSessionForm): SaveInfo? {",
+          )
+
+          Path("app/src/main/java/com/blackserv/passwdgen/AutofillGeneratedPassword.kt").write_text('''package com.blackserv.passwdgen
+
+internal object AutofillGeneratedPasswordPolicy {
+    const val LENGTH = 20
+
+    fun generate(): String = PasswordGenerator.generate(
+        PasswordOptions(
+            length = LENGTH,
+            lowerCase = true,
+            upperCase = true,
+            digits = true,
+            special = true,
+            avoidAmbiguous = true,
+        ),
+    ).value
+}
+''')
+
+          test_path = Path("app/src/test/java/com/blackserv/passwdgen/AutofillPolicyTest.kt")
+          tests = test_path.read_text()
+          marker = "\n}\n"
+          if not tests.endswith(marker):
+              raise SystemExit("AutofillPolicyTest.kt: unexpected ending")
+          extra = r'''
+
+    @Test
+    fun `detects clickable SPA action container`() {
+        assertTrue(
+            AutofillSubmitPolicy.isSubmitCandidate(
+                htmlTag = "div",
+                htmlAttributes = listOf("data-testid" to "registration-submit"),
+                className = "android.view.View",
+                text = "Załóż konto",
+                contentDescription = null,
+                idEntry = null,
+                clickable = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `does not treat passive action text as submit control`() {
+        assertFalse(
+            AutofillSubmitPolicy.isSubmitCandidate(
+                htmlTag = "div",
+                htmlAttributes = emptyList(),
+                className = "android.view.View",
+                text = "Załóż konto",
+                contentDescription = null,
+                idEntry = null,
+                clickable = false,
+            ),
+        )
+    }
+'''
+          test_path.write_text(tests[:-len(marker)] + extra + marker)
+
+          replace_once(
+              "app/build.gradle.kts",
+              '?: if (versionCodeProperty == null) 23 else error("passwdgen.versionCode must be a positive integer")',
+              '?: if (versionCodeProperty == null) 24 else error("passwdgen.versionCode must be a positive integer")',
+          )
+          replace_once(
+              "app/build.gradle.kts",
+              '?: if (versionNameProperty == null) "0.1.13" else error("passwdgen.versionName must not be blank")',
+              '?: if (versionNameProperty == null) "0.1.14" else error("passwdgen.versionName must not be blank")',
+          )
+          PY
+
+      - name: Test patched implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug
+
+      - name: Commit and push patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "blackserv-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add app/build.gradle.kts app/src/main/java app/src/test/java
+          git commit -m "Add Autofill password generator and SPA submit recovery"
+          git push origin HEAD:agent/android-vault-mvp
