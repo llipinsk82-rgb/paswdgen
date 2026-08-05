@@ -1,0 +1,20 @@
+*.iml
+.gradle/
+local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+app/release/
+
+# Android signing material must never be committed.
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.jks.base64.txt
+*.keystore.base64.txt
+keystore.properties
+signing-output/

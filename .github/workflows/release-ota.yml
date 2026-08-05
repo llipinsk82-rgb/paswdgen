@@ -1,0 +1,176 @@
+name: Release OTA
+
+on:
+  push:
+    tags:
+      - "v*"
+    branches:
+      - "release/v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Sign and publish OTA release
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      EXPECTED_SIGNER_SHA256: "4bbe62f2bad5733fcc1585ed6fe437bedeb181ffb3637a0a067138d2131c90b1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager_bin="$(command -v sdkmanager || true)"
+          if [[ -z "${sdkmanager_bin}" ]]; then
+            sdkmanager_bin="$(find "${ANDROID_SDK_ROOT}/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          fi
+          yes | "${sdkmanager_bin}" --licenses >/dev/null || true
+          "${sdkmanager_bin}" --install \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "platform-tools"
+
+      - name: Verify Gradle Wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "81a82aaea5abcc8ff68b3dfcb58b3c3c429378efd98e7433460610fecd7ae45f  gradle/wrapper/gradle-wrapper.jar" \
+            | sha256sum --check --strict
+          grep -Fx "distributionSha256Sum=20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78" \
+            gradle/wrapper/gradle-wrapper.properties
+
+      - name: Restore protected signing key
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${KEYSTORE_BASE64:?Missing ANDROID_KEYSTORE_BASE64 secret}"
+          : "${ANDROID_KEYSTORE_PASSWORD:?Missing ANDROID_KEYSTORE_PASSWORD secret}"
+          : "${ANDROID_KEY_ALIAS:?Missing ANDROID_KEY_ALIAS secret}"
+          : "${ANDROID_KEY_PASSWORD:?Missing ANDROID_KEY_PASSWORD secret}"
+          umask 077
+          printf '%s' "${KEYSTORE_BASE64}" | base64 --decode > "${RUNNER_TEMP}/passwdgen-release.jks"
+          test -s "${RUNNER_TEMP}/passwdgen-release.jks"
+          echo "ANDROID_KEYSTORE_FILE=${RUNNER_TEMP}/passwdgen-release.jks" >> "${GITHUB_ENV}"
+          echo "ANDROID_KEYSTORE_PASSWORD=${ANDROID_KEYSTORE_PASSWORD}" >> "${GITHUB_ENV}"
+          echo "ANDROID_KEY_ALIAS=${ANDROID_KEY_ALIAS}" >> "${GITHUB_ENV}"
+          echo "ANDROID_KEY_PASSWORD=${ANDROID_KEY_PASSWORD}" >> "${GITHUB_ENV}"
+
+      - name: Test and build signed release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon testDebugUnitTest lintRelease assembleRelease
+
+      - name: Verify pinned signer and prepare update manifest
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_tools="${ANDROID_SDK_ROOT}/build-tools/36.0.0"
+          source_apk="app/build/outputs/apk/release/app-release.apk"
+          release_dir="${RUNNER_TEMP}/release"
+          release_apk="${release_dir}/PasswdGen-release.apk"
+          verification="${RUNNER_TEMP}/release-apksigner-verification.txt"
+          mkdir -p "${release_dir}"
+          cp "${source_apk}" "${release_apk}"
+
+          "${build_tools}/apksigner" verify --verbose --print-certs "${release_apk}" \
+            > "${verification}" 2>&1
+          cat "${verification}"
+          grep -Fq "Verified using v3 scheme (APK Signature Scheme v3): true" "${verification}"
+
+          package_id="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest application-id "${release_apk}" | tr -d '\r\n')"
+          version_code="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest version-code "${release_apk}" | tr -d '\r\n')"
+          version_name="$("${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer" manifest version-name "${release_apk}" | tr -d '\r\n')"
+          signer_line="$(grep -Eim1 'certificate SHA-256 digest:' "${verification}" || true)"
+          signer_sha256="$(printf '%s' "${signer_line}" \
+            | sed -E 's/^.*digest:[[:space:]]*//' \
+            | tr -d '[:space:]:' \
+            | tr '[:upper:]' '[:lower:]')"
+          expected_sha256="$(printf '%s' "${EXPECTED_SIGNER_SHA256}" \
+            | tr -d '[:space:]:' \
+            | tr '[:upper:]' '[:lower:]')"
+
+          test "${package_id}" = "com.blackserv.passwdgen"
+          test "${signer_sha256}" = "${expected_sha256}"
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            release_tag="${GITHUB_REF_NAME}"
+            release_mode="existing-tag"
+          else
+            release_tag="${GITHUB_REF_NAME#release/}"
+            release_mode="create-tag"
+          fi
+
+          expected_tag="v${version_name}"
+          if [[ "${release_tag}" != "${expected_tag}" ]]; then
+            echo "Release ref ${release_tag} does not match app version ${expected_tag}." >&2
+            exit 1
+          fi
+
+          apk_sha256="$(sha256sum "${release_apk}" | awk '{print $1}')"
+          apk_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${release_tag}/PasswdGen-release.apk"
+          jq -n \
+            --argjson versionCode "${version_code}" \
+            --arg versionName "${version_name}" \
+            --arg apkUrl "${apk_url}" \
+            --arg sha256 "${apk_sha256}" \
+            '{versionCode:$versionCode,versionName:$versionName,apkUrl:$apkUrl,sha256:$sha256}' \
+            > "${release_dir}/update.json"
+
+          echo "Pinned production signer verified: ${signer_sha256}"
+          echo "APK Signature Scheme v3 verified."
+          echo "release_dir=${release_dir}" >> "${GITHUB_OUTPUT}"
+          echo "version_name=${version_name}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+          echo "release_mode=${release_mode}" >> "${GITHUB_OUTPUT}"
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_DIR: ${{ steps.package.outputs.release_dir }}
+          VERSION_NAME: ${{ steps.package.outputs.version_name }}
+          RELEASE_TAG: ${{ steps.package.outputs.release_tag }}
+          RELEASE_MODE: ${{ steps.package.outputs.release_mode }}
+        run: |
+          set -euo pipefail
+          if [[ "${RELEASE_MODE}" == "existing-tag" ]]; then
+            gh release create "${RELEASE_TAG}" \
+              "${RELEASE_DIR}/PasswdGen-release.apk" \
+              "${RELEASE_DIR}/update.json" \
+              --title "PasswdGen ${VERSION_NAME}" \
+              --generate-notes \
+              --verify-tag
+          else
+            gh release create "${RELEASE_TAG}" \
+              "${RELEASE_DIR}/PasswdGen-release.apk" \
+              "${RELEASE_DIR}/update.json" \
+              --title "PasswdGen ${VERSION_NAME}" \
+              --generate-notes \
+              --target "${GITHUB_SHA}"
+          fi
+
+      - name: Remove signing material
+        if: always()
+        shell: bash
+        run: rm -f "${RUNNER_TEMP}/passwdgen-release.jks"
