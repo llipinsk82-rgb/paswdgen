@@ -1,15 +1,14 @@
 name: Verify OTA v0.1.14
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/android-vault-mvp
+      - main
     paths:
       - .github/workflows/verify-ota-v0.1.14.yml
 
 permissions:
   contents: read
-  issues: write
 
 jobs:
   verify:
@@ -53,4 +52,6 @@ jobs:
           test "${expected_sha}" != "null"
           test "${#expected_sha}" -eq 64
 
-          gh issue comment 1 --body "### OTA ${RELEASE_TAG} — VERIFIED\n\n- GitHub Release istnieje,\n- `PasswdGen-release.apk` istnieje i ma ${apk_size} bajtów,\n- `update.json` wskazuje versionCode 24 / versionName 0.1.14,\n- URL APK jest prawidłowy,\n- SHA-256 pobranego APK jest zgodne z manifestem: `${actual_sha}`.\n\nAktualizacja jest dostępna dla mechanizmu OTA aplikacji."
+          echo "OTA ${RELEASE_TAG} verified"
+          echo "APK size: ${apk_size} bytes"
+          echo "APK SHA-256: ${actual_sha}"
