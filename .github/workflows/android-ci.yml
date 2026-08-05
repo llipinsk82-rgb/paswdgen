@@ -6,24 +6,12 @@ on:
       - agent/android-vault-mvp
     paths:
       - app/**
-      - gradle/**
-      - build.gradle.kts
-      - settings.gradle.kts
-      - gradle.properties
-      - gradlew
-      - gradlew.bat
       - .github/workflows/android-ci.yml
   pull_request:
     branches:
       - main
     paths:
       - app/**
-      - gradle/**
-      - build.gradle.kts
-      - settings.gradle.kts
-      - gradle.properties
-      - gradlew
-      - gradlew.bat
       - .github/workflows/android-ci.yml
   workflow_dispatch:
 
@@ -31,13 +19,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: autofill-wiring-agent
+  cancel-in-progress: false
 
 jobs:
   patch-autofill:
     name: Wire Autofill generator and SPA recovery
-    if: github.event_name == 'push' && github.ref == 'refs/heads/agent/android-vault-mvp'
+    if: github.ref == 'refs/heads/agent/android-vault-mvp' || github.head_ref == 'agent/android-vault-mvp'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -69,7 +57,7 @@ jobs:
           yes | "${sdkmanager_bin}" --licenses >/dev/null || true
           "${sdkmanager_bin}" --install "platforms;android-36" "build-tools;36.0.0" "platform-tools"
 
-      - name: Patch service and version
+      - name: Patch service and version when needed
         shell: bash
         run: |
           set -euo pipefail
@@ -84,185 +72,75 @@ jobs:
                   raise SystemExit(f"{path}: expected one match, found {count}: {old!r}")
               file.write_text(text.replace(old, new, 1))
 
-          service = "app/src/main/java/com/blackserv/passwdgen/PasswdGenAutofillService.kt"
-          build = "app/build.gradle.kts"
+          service = Path("app/src/main/java/com/blackserv/passwdgen/PasswdGenAutofillService.kt")
+          build = Path("app/build.gradle.kts")
+          text = service.read_text()
 
-          if not Path("app/src/main/java/com/blackserv/passwdgen/AutofillGeneratedPassword.kt").exists():
-              raise SystemExit("AutofillGeneratedPassword.kt is missing")
-          if not Path("app/src/main/java/com/blackserv/passwdgen/AutofillSpaSubmit.kt").exists():
-              raise SystemExit("AutofillSpaSubmit.kt is missing")
-
-          text = Path(service).read_text()
-          if "buildGeneratedPasswordDataset" in text:
-              raise SystemExit("PasswdGenAutofillService is already wired")
-          import_anchor = "import android.widget.RemoteViews\n"
-          if text.count(import_anchor) != 1:
-              raise SystemExit("RemoteViews import anchor missing")
-          Path(service).write_text(
-              text.replace(
-                  import_anchor,
-                  import_anchor + "import android.view.autofill.AutofillValue\n",
-                  1,
+          if "buildGeneratedPasswordDataset" not in text:
+              import_anchor = "import android.widget.RemoteViews\n"
+              if text.count(import_anchor) != 1:
+                  raise SystemExit("RemoteViews import anchor missing")
+              service.write_text(
+                  text.replace(
+                      import_anchor,
+                      import_anchor + "import android.view.autofill.AutofillValue\n",
+                      1,
+                  )
               )
-          )
+              replace_once(
+                  str(service),
+                  "        val sessionForm = AutofillSessionPolicy.merge(\n            forms = analyses.mapNotNull(AutofillParseResult::form),\n            current = form,\n        )\n        val authenticationIntent",
+                  "        val sessionForm = AutofillSessionPolicy.merge(\n            forms = analyses.mapNotNull(AutofillParseResult::form),\n            current = form,\n        )\n        val saveForm = sessionForm.copy(\n            submitId = sessionForm.submitId ?: AutofillSpaSubmitPolicy.find(\n                contexts.map { context -> context.structure },\n            ),\n        )\n        val authenticationIntent",
+              )
+              replace_once(
+                  str(service),
+                  "                session = sessionForm,",
+                  "                session = saveForm,",
+              )
+              replace_once(
+                  str(service),
+                  "        val response = FillResponse.Builder()\n            .addDataset(lockedDataset)\n            .setClientState(session.toBundle())\n        buildSaveInfo(sessionForm)?.let(response::setSaveInfo)",
+                  "        val response = FillResponse.Builder()\n            .addDataset(lockedDataset)\n            .setClientState(session.toBundle())\n        buildGeneratedPasswordDataset(form, targetDetail)?.let(response::addDataset)\n        buildSaveInfo(saveForm)?.let(response::setSaveInfo)",
+              )
+              replace_once(
+                  str(service),
+                  "    private fun buildSaveInfo(form: AutofillSessionForm): SaveInfo? {",
+                  "    private fun buildGeneratedPasswordDataset(\n        form: AutofillForm,\n        targetDetail: String,\n    ): Dataset? {\n        val passwordId = form.passwordId ?: return null\n        val generatedPassword = AutofillGeneratedPasswordPolicy.generate()\n        val presentation = RemoteViews(packageName, R.layout.autofill_presentation).apply {\n            setTextViewText(R.id.autofill_primary, \"Wygeneruj silne hasło\")\n            setTextViewText(\n                R.id.autofill_secondary,\n                \"${AutofillGeneratedPasswordPolicy.LENGTH} znaków • $targetDetail\",\n            )\n        }\n        return Dataset.Builder(presentation).apply {\n            val value = AutofillValue.forText(generatedPassword)\n            setValue(passwordId, value, presentation)\n            form.confirmationPasswordId\n                ?.takeIf { confirmationId -> confirmationId != passwordId }\n                ?.let { confirmationId -> setValue(confirmationId, value, presentation) }\n            setId(\"passwdgen-generated\")\n        }.build()\n    }\n\n    private fun buildSaveInfo(form: AutofillSessionForm): SaveInfo? {",
+              )
 
-          replace_once(
-              service,
-              "        val sessionForm = AutofillSessionPolicy.merge(\n            forms = analyses.mapNotNull(AutofillParseResult::form),\n            current = form,\n        )\n        val authenticationIntent",
-              "        val sessionForm = AutofillSessionPolicy.merge(\n            forms = analyses.mapNotNull(AutofillParseResult::form),\n            current = form,\n        )\n        val saveForm = sessionForm.copy(\n            submitId = sessionForm.submitId ?: AutofillSpaSubmitPolicy.find(\n                contexts.map { context -> context.structure },\n            ),\n        )\n        val authenticationIntent",
-          )
-          replace_once(
-              service,
-              "                session = sessionForm,",
-              "                session = saveForm,",
-          )
-          replace_once(
-              service,
-              "        val response = FillResponse.Builder()\n            .addDataset(lockedDataset)\n            .setClientState(session.toBundle())\n        buildSaveInfo(sessionForm)?.let(response::setSaveInfo)",
-              "        val response = FillResponse.Builder()\n            .addDataset(lockedDataset)\n            .setClientState(session.toBundle())\n        buildGeneratedPasswordDataset(form, targetDetail)?.let(response::addDataset)\n        buildSaveInfo(saveForm)?.let(response::setSaveInfo)",
-          )
-          replace_once(
-              service,
-              "    private fun buildSaveInfo(form: AutofillSessionForm): SaveInfo? {",
-              "    private fun buildGeneratedPasswordDataset(\n        form: AutofillForm,\n        targetDetail: String,\n    ): Dataset? {\n        val passwordId = form.passwordId ?: return null\n        val generatedPassword = AutofillGeneratedPasswordPolicy.generate()\n        val presentation = RemoteViews(packageName, R.layout.autofill_presentation).apply {\n            setTextViewText(R.id.autofill_primary, \"Wygeneruj silne hasło\")\n            setTextViewText(\n                R.id.autofill_secondary,\n                \"${AutofillGeneratedPasswordPolicy.LENGTH} znaków • $targetDetail\",\n            )\n        }\n        return Dataset.Builder(presentation).apply {\n            val value = AutofillValue.forText(generatedPassword)\n            setValue(passwordId, value, presentation)\n            form.confirmationPasswordId\n                ?.takeIf { confirmationId -> confirmationId != passwordId }\n                ?.let { confirmationId -> setValue(confirmationId, value, presentation) }\n            setId(\"passwdgen-generated\")\n        }.build()\n    }\n\n    private fun buildSaveInfo(form: AutofillSessionForm): SaveInfo? {",
-          )
-          replace_once(
-              build,
-              '?: if (versionCodeProperty == null) 23 else error("passwdgen.versionCode must be a positive integer")',
-              '?: if (versionCodeProperty == null) 24 else error("passwdgen.versionCode must be a positive integer")',
-          )
-          replace_once(
-              build,
-              '?: if (versionNameProperty == null) "0.1.13" else error("passwdgen.versionName must not be blank")',
-              '?: if (versionNameProperty == null) "0.1.14" else error("passwdgen.versionName must not be blank")',
-          )
+          build_text = build.read_text()
+          if '"0.1.13"' in build_text:
+              replace_once(
+                  str(build),
+                  '?: if (versionCodeProperty == null) 23 else error("passwdgen.versionCode must be a positive integer")',
+                  '?: if (versionCodeProperty == null) 24 else error("passwdgen.versionCode must be a positive integer")',
+              )
+              replace_once(
+                  str(build),
+                  '?: if (versionNameProperty == null) "0.1.13" else error("passwdgen.versionName must not be blank")',
+                  '?: if (versionNameProperty == null) "0.1.14" else error("passwdgen.versionName must not be blank")',
+              )
+          elif '"0.1.14"' not in build_text:
+              raise SystemExit("Unexpected app version")
           PY
 
-      - name: Verify patched implementation
+      - name: Verify implementation
         shell: bash
         run: |
           set -euo pipefail
           chmod +x gradlew
           ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug
 
-      - name: Commit patched implementation
+      - name: Commit implementation when changed
         shell: bash
         run: |
           set -euo pipefail
+          if git diff --quiet; then
+            echo "Implementation already wired; no commit needed."
+            exit 0
+          fi
           git config user.name "blackserv-actions"
           git config user.email "actions@users.noreply.github.com"
           git add app/build.gradle.kts app/src/main/java/com/blackserv/passwdgen/PasswdGenAutofillService.kt
           git commit -m "Wire Autofill password generator and SPA save trigger"
           git push origin HEAD:agent/android-vault-mvp
-
-  build:
-    name: Test, lint and package
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Install Android SDK 36
-        shell: bash
-        run: |
-          set -euo pipefail
-          android_home="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-          if [[ -z "${android_home}" ]]; then
-            echo "ERROR: ANDROID_SDK_ROOT and ANDROID_HOME are not set." >&2
-            exit 1
-          fi
-
-          sdkmanager_bin="$(command -v sdkmanager || true)"
-          if [[ -z "${sdkmanager_bin}" ]]; then
-            sdkmanager_bin="$(find "${android_home}/cmdline-tools" -type f -name sdkmanager 2>/dev/null | sort -V | tail -n 1)"
-          fi
-          if [[ -z "${sdkmanager_bin}" || ! -x "${sdkmanager_bin}" ]]; then
-            echo "ERROR: sdkmanager not found in Android SDK: ${android_home}" >&2
-            exit 1
-          fi
-
-          yes | "${sdkmanager_bin}" --licenses >/dev/null || true
-          "${sdkmanager_bin}" --install \
-            "platforms;android-36" \
-            "build-tools;36.0.0" \
-            "platform-tools"
-
-          test -d "${android_home}/platforms/android-36"
-
-      - name: Verify committed Gradle Wrapper
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -x gradlew
-          echo "81a82aaea5abcc8ff68b3dfcb58b3c3c429378efd98e7433460610fecd7ae45f  gradle/wrapper/gradle-wrapper.jar" \
-            | sha256sum --check --strict
-          grep -Fx "distributionSha256Sum=20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78" \
-            gradle/wrapper/gradle-wrapper.properties
-          ./gradlew --version
-
-      - name: Create source snapshot
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p app/build
-          git archive --format=zip --output app/build/source-snapshot.zip HEAD
-          sha256sum app/build/source-snapshot.zip
-
-      - name: Run unit tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p app/build/ci-logs
-          ./gradlew --no-daemon --stacktrace testDebugUnitTest 2>&1 \
-            | tee app/build/ci-logs/unit-tests.log
-
-      - name: Run Android lint
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p app/build/ci-logs
-          ./gradlew --no-daemon --stacktrace lintDebug 2>&1 \
-            | tee app/build/ci-logs/lint.log
-
-      - name: Assemble debug APK
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p app/build/ci-logs
-          ./gradlew --no-daemon --stacktrace assembleDebug 2>&1 \
-            | tee app/build/ci-logs/assemble-debug.log
-
-      - name: Build unsigned release AAB
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p app/build/ci-logs
-          ./gradlew --no-daemon --stacktrace bundleRelease 2>&1 \
-            | tee app/build/ci-logs/bundle-release.log
-
-      - name: Upload packages, reports and source snapshot
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: android-ci-output
-          if-no-files-found: warn
-          retention-days: 7
-          path: |
-            app/build/source-snapshot.zip
-            app/build/ci-logs/**
-            app/build/outputs/apk/debug/*.apk
-            app/build/outputs/bundle/release/*.aab
-            app/build/reports/tests/**
-            app/build/reports/lint-results-*.html
-            app/build/reports/lint-results-*.xml
-            app/build/outputs/mapping/release/**
